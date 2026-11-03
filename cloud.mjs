@@ -2,7 +2,8 @@
 // Only the calling client executes local tools. No desktop-service fallback.
 import { randomUUID } from "node:crypto"
 import * as discovery from "./discovery.mjs"
-import { buildQuery, events } from "./protocol.mjs"
+import { buildQuery, events, MAX_TOOL_TEXT_CHARS, parseToolCalls } from "./protocol.mjs"
+import { normalizeArguments } from "./tool-schema.mjs"
 import { normalizeMessages, imagesFrom } from "./images.mjs"
 import { clientToolCall, clientToolContract, UnofferedToolError, ToolContractError } from "./tool-adapter.mjs"
 import { SESSION_HEADER, sessionKey, historyHash, catalogHash, continuation, nativeResults } from "./cloud-session.mjs"
@@ -15,11 +16,26 @@ const VERSION = "1.8.0"
 const str = value => typeof value === "string" ? value : ""
 const frame = value => `data: ${JSON.stringify(value)}\n\n`
 const MAX_SESSIONS = 64
+function actionTodoSchema(spec) {
+  if (!spec.enabled || spec.choice === "named" && spec.requiredName !== "todo_write") return
+  const tool = spec.tools.find(entry => spec.byName.get(entry.function.name) === "todo_write")
+  const schema = tool?.function.parameters
+  if (schema?.required?.includes("action") && !schema.properties?.todos && !schema.properties?.plan) return schema
+}
+
+function todoCorrection(spec, rejected) {
+  if (rejected.length !== 1) return
+  const { call } = rejected[0]
+  if (!["todo_write", "TodoWrite", "todowrite"].includes(call.name) || !Object.hasOwn(call.input, "todos")) return
+  return actionTodoSchema(spec)
+}
+
 function nativeInstructions(spec) {
   const choice = spec.choice === "required" ? "You must return at least one offered function call." : spec.choice === "named" ? `You must call only ${JSON.stringify(spec.requiredName)}.` : spec.choice === "none" ? "Do not call any function." : "Call an offered function when needed."
   const contract = clientToolContract(spec)
   const names = contract.functions.map(tool => tool.name)
-  return `You are serving a remote client. Interpret the JSON-lines transcript by its roles and answer its latest turn. Use structured native function requests, not textual tool markers or simulated results. The client alone executes tools after validation; wait for its actual results. Available client function names: ${JSON.stringify(names)}. The client schemas and supported native function aliases are explicit below. Prefer the client name when available; otherwise a listed native alias may request the same client capability using its native arguments, which the adapter maps and validates. Never use provider-side TOOL execution. Do not invent functions, undeclared fields or capabilities. If no offered function or listed equivalent can express the operation, explain the limitation. ${choice} ${spec.parallel ? "" : "Call at most one function."}\nClient tool contract (JSON): ${JSON.stringify(contract)}`
+  const todo = actionTodoSchema(spec) ? " Client todo_write takes one action at a time. The native todos array has different semantics. When the adapter supplies a correction marker, follow that correction format." : ""
+  return `You are serving a remote client. Interpret the JSON-lines transcript by its roles and answer its latest turn. Use structured native function requests, not textual tool markers or simulated results. The client alone executes tools after validation; wait for its actual results. Available client function names: ${JSON.stringify(names)}. The client schemas and supported native function aliases are explicit below. Prefer the client name when available; otherwise a listed native alias may request the same client capability using its native arguments, which the adapter maps and validates. Never use provider-side TOOL execution. Do not invent functions, undeclared fields or capabilities. If no offered function or listed equivalent can express the operation, explain the limitation. ${choice} ${spec.parallel ? "" : "Call at most one function."}${todo}\nClient tool contract (JSON): ${JSON.stringify(contract)}`
 }
 const textContent = content => typeof content === "string" ? content : Array.isArray(content) ? content.map(part => str(part?.text)).join("") : str(content?.text)
 
@@ -170,10 +186,11 @@ export function cloudHooks(hooks, options = {}, shared) {
         const response = await post(API + "/execute", executeInput, a.license, signal, true)
         // This is a new native result turn after an actual local validation
         // failure, never a replay/retry of a query or an executed client tool.
-        const correctContract = async results => {
+        const correctContract = async (results, correctionFormat) => {
           signal.throwIfAborted()
           const corrected = await post(API + "/execute", {
             ...executeInput, query: "", contexts: [], toolUseResults: results,
+            systemReminder: instructions + correctionFormat,
             isFirstQuery: false, isUserQuery: false,
           }, a.license, signal, true)
           return corrected.body
@@ -195,7 +212,10 @@ export function cloudHooks(hooks, options = {}, shared) {
               if (index >= 0) pending.push({ ...remaining.splice(index, 1)[0], clientId: call.id })
             }
             if (remaining.length) throw new Error("Cloud/client tool correlation failed")
-            remember(key, { conversationId, taskId, pending, catalog, count: chat.messages.length, hash: historyHash(chat.messages) })
+            // Textual calls have no native IDs. Resume with the full client
+            // transcript rather than sending an unmatched native result.
+            if (calls.length !== pending.length) sessions.delete(key)
+            else remember(key, { conversationId, taskId, pending, catalog, count: chat.messages.length, hash: historyHash(chat.messages) })
             committed = true
             cleanup()
           },
@@ -252,9 +272,10 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, cor
   const encoder = new TextEncoder()
   async function* convert() {
     try {
+      let todoSchema, correctionFormat = ""
       for (let correction = 0; ; correction++) {
         const live = new Map(), completed = [], rejected = []
-        let hasText = false, results
+        let hasText = false, results, correctionText = ""
         for await (const event of events(timedBytes(body, controller, signal, idle))) {
           const content = event?.content
           if (!content || typeof content.type !== "string") throw new Error("Unexpected Comate cloud event envelope")
@@ -284,18 +305,41 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, cor
           }
           if (content.type === "ANSWER") {
             if (str(detail.reasoningDelta)) { usage.reasoning(detail.reasoningDelta); yield frame({ kind: "thinking-delta", delta: detail.reasoningDelta }) }
-            if (str(detail.delta)) { usage.text(detail.delta); hasText = true; yield frame({ kind: "text-delta", delta: detail.delta }) }
+            if (str(detail.delta)) {
+              usage.text(detail.delta)
+              hasText = true
+              if (todoSchema) {
+                correctionText += detail.delta
+                if (correctionText.length > MAX_TOOL_TEXT_CHARS) throw new Error("Todo correction text is too large")
+              } else yield frame({ kind: "text-delta", delta: detail.delta })
+            }
             if (detail.end === true) {
               if (live.size) throw new Error("Comate ended with incomplete tool arguments")
               if (rejected.length) {
                 // Never discard/replay a valid pending call, violate the caller's
                 // parallel limit, or keep correcting an uncooperative model.
                 if (correction || completed.length || !spec.parallel && rejected.length > 1) throw rejected[0].error
+                todoSchema = todoCorrection(spec, rejected)
+                correctionFormat = todoSchema
+                  ? `\nFor this correction only, use a textual tool block for any needed todo_write call, instead of the native function. Output exactly one client todo_write action in this format: ${spec.startTag}[{"name":"todo_write","arguments":{"action":"list"}}]${spec.endTag}. This is a format example. Choose the action and arguments that match the task, using the client schema. Never invent item IDs or report execution yourself.`
+                  : ""
                 results = rejected.map(({ call, error }) => ({
                   id: call.id, name: call.name, params: call.input, success: false,
-                  message: `${error.message}. Validation rejected this call before execution; no client tool ran. ${nativeInstructions(spec)}`,
+                  message: `${error.message}. Validation rejected this call before execution; no client tool ran. ${nativeInstructions(spec)}${correctionFormat}`,
                 }))
                 break
+              }
+              if (todoSchema && hasText) {
+                const parsed = parseToolCalls(correctionText, spec)
+                if (parsed.invalid || parsed.calls.length && (completed.length || parsed.calls.length !== 1 || parsed.calls[0].name !== "todo_write")) {
+                  throw new Error("Invalid todo correction tool block")
+                }
+                if (parsed.calls.length) {
+                  const input = normalizeArguments(JSON.parse(parsed.calls[0].arguments), todoSchema)
+                  completed.push({ name: "todo_write", arguments: input })
+                }
+                const text = parsed.calls.length ? parsed.content : correctionText
+                if (text) yield frame({ kind: "text-delta", delta: text })
               }
               if (!hasText && !completed.length) throw new Error("Comate completed without an answer or tool call")
               if (completed.length) yield frame({ kind: "text-delta", delta: spec.startTag + JSON.stringify(completed) + spec.endTag })
@@ -305,7 +349,7 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, cor
           }
         }
         if (!results) throw new Error("Comate stream ended before its completion event")
-        body = await correctContract(results)
+        body = await correctContract(results, correctionFormat)
       }
     } catch (error) { yield frame({ type: "task_failed", errorMessage: error.message }) }
   }

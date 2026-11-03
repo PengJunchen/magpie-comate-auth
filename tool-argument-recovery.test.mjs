@@ -13,7 +13,8 @@ async function fixture(outputs,tools=contracts) {
     if(url.endsWith('/conversation'))return Response.json({code:0,data:{id:1}})
     if(url.endsWith('/task'))return Response.json({code:0,data:{taskId:2}})
     executions.push(body)
-    const events=outputs[executions.length-1];assert.ok(events,'unexpected extra correction')
+    const output=outputs[executions.length-1]
+    const events=typeof output==='function'?output(body):output;assert.ok(events,'unexpected extra correction')
     return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}})
   }})
   const loader=await hooks.auth.loader(async()=>({type:'api',key:'synthetic-argument-license'}))
@@ -88,4 +89,48 @@ test('mixed valid and argument-invalid calls fail atomically before any client c
   const raw=await (await f.request(true)).text()
   assert.match(raw,/"error"/);assert.ok(!raw.includes('"tool_calls"'))
   assert.ok(!raw.includes('"usage":'));assert.equal(f.executions.length,1)
+})
+
+const actionTodo = define('todo_write', {
+  action: {type:'string', enum:['add','update','list','remove']},
+  content: {type:'string'}, id: {type:'string'}, status: {type:'string'}, priority: {type:'string'},
+}, ['action'])
+const nativeTodo = [call('todo_write',{todos:'[{"content":"Synthetic item","status":"pending"}]'},'native-batch'),done]
+
+function todoBlock(body, calls) {
+  const marker = body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:([\w-]+)\|>/)
+  assert.ok(marker)
+  return [{content:{type:'ANSWER',detail:{delta:marker[0]+JSON.stringify(calls)+'<|/MAGPIE_TOOL_CALLS:'+marker[1]+'|>',end:true}}}]
+}
+
+for(const stream of [false,true])test(`native todo array corrects to one client action with actual result replay (stream=${stream})`,async()=>{
+  const args={action:'add',content:'Synthetic item',status:'pending'}
+  const f=await fixture([nativeTodo,body=>todoBlock(body,[{name:'todo_write',arguments:args}]),answer],[actionTodo])
+  const first=await readMessage(await f.request(stream),stream)
+  const client=first.tool_calls[0]
+  assert.equal(client.function.name,'todo_write')
+  assert.deepEqual(JSON.parse(client.function.arguments),args)
+  assert.equal(f.executions[1].toolUseResults[0].success,false)
+  assert.equal(f.executions[1].toolUseResults[0].id,'native-batch')
+  assert.deepEqual(f.executions[0].tools,f.executions[1].tools)
+  f.messages.push(first,{role:'tool',tool_call_id:client.id,content:'ACTUAL_CLIENT_RESULT'})
+  await readMessage(await f.request(stream),stream)
+  assert.equal(f.executions[2].isFirstQuery,true)
+  assert.deepEqual(f.executions[2].toolUseResults,[])
+  assert.ok(f.executions[2].query.includes('ACTUAL_CLIENT_RESULT'))
+  assert.ok(f.executions[2].query.includes(client.id))
+})
+
+test('todo correction rejects invalid or extra fields and multiple actions without another attempt',async()=>{
+  for(const calls of [
+    [{name:'todo_write',arguments:{action:'invented'}}],
+    [{name:'todo_write',arguments:{action:'list',todos:[]}}],
+    [{name:'todo_write',arguments:{action:'list'}},{name:'todo_write',arguments:{action:'list'}}],
+  ]) {
+    const f=await fixture([nativeTodo,body=>todoBlock(body,calls)],[actionTodo])
+    const raw=await (await f.request(true)).text()
+    assert.match(raw,/"error"/)
+    assert.ok(!raw.includes('"tool_calls"'))
+    assert.equal(f.executions.length,2)
+  }
 })

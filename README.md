@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.6`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.7`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.6.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.7.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.6.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.6.tgz
+├── magpie-comate-auth-0.5.7.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.7.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -243,3 +243,5 @@ npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs
 独立项目的运行源码来自 [PengJunchen/plugins](https://github.com/PengJunchen/plugins/tree/codex/comate-cloud-local-20261102/packages/comate) 提交 `48801b2`；保留 MIT 许可及贡献者声明。吸收 Liu-LingYu 0.2.13 的部分云端协议思路。后续以本仓库根目录源码和测试维护公开插件。
 
 旧社区 PR [#77](https://github.com/magpie-community/plugins/pull/77) 已关闭；本项目不是该 PR 获批或市场重新上架的声明。
+
+当原生 `todo_write` 返回 `todos` 数组，而客户端同名工具声明单条 `action` 时，0.5.7 在一次纠正回合中提供显式调用标记。只转发经原客户端 schema 验证的单条操作。下一轮以完整客户端历史回传真实工具结果。
