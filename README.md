@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.4`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.5`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.4.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.5.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.4.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.4.tgz
+├── magpie-comate-auth-0.5.5.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.5.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -159,6 +159,11 @@ Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼�
 这不是完整 JSON Schema 引擎，仍拒绝 `strict:true`；客户端仍负责最终参数和权限验证。
 
 仅当前请求实际提供的工具才可能被选中，不创建不存在的能力，不降级绕过审批。
+从 `0.5.5` 开始，遇到未声明且没有可用等价适配的原生函数名（例如 `delete_file`，或客户端只提供 `find` 时的 `glob_path`），
+插件在完整云端回合结束、且没有其它合法待执行调用时，将这次真实的边界校验失败以 `success:false` 回传原云端 task，附上当前可用函数名称，只允许一次纠正。
+不会添加删除能力、自动生成删除命令或伪造执行成功；模型重新选择的函数仍须通过相同的客户端 schema、tool_choice 和执行审批。
+重复非法调用、混合合法与非法调用、未完成流、参数错误和网络错误仍明确失败；不会重放用户输入、已执行工具结果或图片上传。
+流中顶层 `error` 表示失败，即使 HTTP 为 200 且最后有 `[DONE]`；调用方应先识别该错误，不能仅凭 `[DONE]` 判断成功。
 流式与非流式使用同一适配器，回传云端时保留原始工具名、参数及调用 ID，客户端参数转换不污染原始记录。
 搜索支持 `content`、`files_with_matches`、`count`。优先使用能完整表达请求的客户端搜索工具；
 Harness 固定内容搜索可等价接收 `content`，其他模式或额外选项则交给客户端已声明的 shell 执行转义后的 `rg`。

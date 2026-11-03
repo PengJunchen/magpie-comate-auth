@@ -1,3 +1,86 @@
+# 0.5.5 Bounded unoffered-function correction — 2026-11-04
+
+## Cause
+
+The failed response is not an empty or silently malformed SSE event. Its final
+JSON event is an explicit top-level error (api_error/comate_error), followed by
+DONE. The safe adapter diagnostic names an unoffered delete_file function;
+two other reported failures name glob_path. HTTP 200 and DONE alone therefore
+cannot establish a successful generation. The consumer's generic stream error
+obscures this upstream cause, but changing that consumer is outside this fix.
+
+The client catalog has no delete_file. Its find capability also is not one of
+the glob/Glob capabilities in the plugin's equivalence profiles; interpreting
+its pattern semantics as arbitrary recursive globs would be an unverified
+conversion. The plugin correctly refuses to issue undeclared client tools,
+but previously terminated the entire generation immediately instead of letting
+the cloud model react to that actual validation failure. Generic reminders to
+use offered functions did not prevent Comate from choosing its native names.
+
+## Repair and boundaries
+
+The current allowed client function names are now explicit in the cloud
+instructions. An UnofferedToolError identifies only an unavailable function
+name with no compatible strategy; invalid arguments and unsupported execution
+semantics are not reclassified as unavailable names.
+
+After a complete cloud turn containing only unavailable calls, the adapter may
+submit their original IDs/names/params and success:false to the same native
+task, explicitly stating that validation rejected the calls before execution.
+The result includes the unchanged current capability/choice contract. Exactly
+one such corrective result turn is permitted per client request. It is not a
+retry of an ambiguous POST, user query, image upload or executed client result.
+
+Only the corrected call, if it passes the existing adapters/schema/choice
+checks, reaches the client. No delete function, rm command, approval override
+or fabricated successful result is introduced. Repeated unknown calls, mixed
+valid/invalid batches, disabled/empty tools, parallel-limit violations, argument
+errors, incomplete streams and network errors remain failures. Cancellation
+aborts the corrective request. Failed/cancelled state is evicted and its session
+lock released. Error SSE envelopes remain errors; no fake choices, successful
+finish reason or successful usage is attached to hide them.
+
+## Verification
+
+- 188 package tests passed with the explicit installed Magpie production host
+  host-c45194121abc.js and Bun 1.4.4, 0 failed/skipped. Synthetic regressions
+  cover delete_file and glob_path, declared read/find selection, preserved IDs
+  and actual failed/successful client results, strict successful OpenAI streams,
+  repetition bound, normal streams, named/required/none choices, mixed batches,
+  malformed arguments, stream truncation, network failure, image/result replay
+  prevention, cancellation and session cleanup. Earlier directory, search,
+  context-usage and cloud-only protocol regressions remain covered.
+- New production-host fixtures exercise both streaming and JSON modes through
+  a controlled upstream. The only declared tool is read. After an injected
+  delete_file rejection, the host exposes read only, the actual parent/client
+  reads its scratch file, and the original read_file result returns to the same
+  task. The scratch file still exists throughout; no deletion tool runs.
+- A controlled live-cloud fault probe uses real DeepSeek-v4.1-Flash with read
+  as its only offered capability. The first turn's test instructions deliberately
+  induce a real native delete_file event (this is fault injection, not a claim
+  that normal production instructions naturally reproduce it every time).
+  Comate accepts success:false for the actual rejected native call, then emits
+  read_file, which becomes a client read. After the actual scratch-file result,
+  the real cloud returns RECOVERY_REAL_READ_OK. The undeleted sentinel remains.
+  Three native execute turns have catalogs [read] throughout and results [],
+  [delete_file:false], [read_file:true]; no capability is added.
+- After confirmation that the previous batch owner/resources were stopped,
+  the local path package was rebuilt as 0.5.5 and reloaded using Magpie plugin
+  add. Magpie 0.1.2862's gateway healthcheck succeeds on 127.0.0.1:3425.
+  Live gateway plain, actual read-call and read-continuation probes all return
+  HTTP 200, only choices/usage JSON events, one usage chunk and one DONE each.
+  These use stream:true, max_tokens:16384 and no temperature/reasoning_effort.
+  An initial auto-choice read probe produced no tool call (its SSE was valid);
+  a fresh probe completed the actual read chain. This is protocol/adapter smoke
+  evidence, not a guarantee that an automatic model always chooses a tool.
+
+Only synthetic fixtures and public runtime/documentation changes are committed.
+No evaluation requests, task data, answers, model reasoning, credentials, raw
+headers or private logs are included. The full evaluation restart belongs to
+the calling workflow; previous partial results are not reused by this change.
+
+---
+
 # 0.5.4 Native list_dir ignore_globs — 2026-11-04
 
 ## Cause and relationship to 0.5.0

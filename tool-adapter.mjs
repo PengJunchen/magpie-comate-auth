@@ -9,6 +9,15 @@ import { isSearchCall, searchCall } from "./tool-search.mjs"
 const declared = spec => spec.tools.map(tool => ({ name: spec.byName.get(tool.function.name), schema: tool.function.parameters ?? {} }))
 const finish = (target, input) => ({ name: target.name, input: normalizeArguments(input, target.schema) })
 
+// Only an unknown tool name is eligible for a bounded upstream correction.
+// Invalid arguments, forbidden choices and incompatible semantics still fail.
+export class UnofferedToolError extends Error {
+  constructor(name) {
+    super(`Comate requested a tool the client did not offer: ${name}`)
+    this.name = "UnofferedToolError"
+  }
+}
+
 function renameFields(input, profile, target) {
   const properties = target.schema.properties ?? {}
   const output = new Map()
@@ -50,7 +59,7 @@ export function clientToolCall(call, spec) {
   const strategy = STRATEGIES.find(strategy => strategy.matches(call))
   if (strategy) return strategy.adapt(call, spec)
   if (errors.length) throw new Error(errors.join("; "))
-  throw new Error(`Comate requested a tool the client did not offer: ${call.name}`)
+  throw new UnofferedToolError(call.name)
 }
 
 const STRATEGIES = [

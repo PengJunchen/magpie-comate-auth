@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import * as discovery from "./discovery.mjs"
 import { buildQuery, events } from "./protocol.mjs"
 import { normalizeMessages, imagesFrom } from "./images.mjs"
-import { clientToolCall } from "./tool-adapter.mjs"
+import { clientToolCall, UnofferedToolError } from "./tool-adapter.mjs"
 import { SESSION_HEADER, sessionKey, historyHash, catalogHash, continuation, nativeResults } from "./cloud-session.mjs"
 import { createUsageMeter } from "./usage.mjs"
 
@@ -17,7 +17,8 @@ const frame = value => `data: ${JSON.stringify(value)}\n\n`
 const MAX_SESSIONS = 64
 function nativeInstructions(spec) {
   const choice = spec.choice === "required" ? "You must return at least one offered function call." : spec.choice === "named" ? `You must call only ${JSON.stringify(spec.requiredName)}.` : spec.choice === "none" ? "Do not call any function." : "Call an offered function when needed."
-  return `You are serving a remote client. Interpret the JSON-lines transcript by its roles and answer its latest turn. Use structured native function calls with the offered tool names and parameters, not textual tool markers or simulated results. The client alone executes tools; wait for its actual results. ${choice} ${spec.parallel ? "" : "Call at most one function."}`
+  const names = spec.enabled ? spec.tools.map(tool => spec.byName.get(tool.function.name)).filter(name => spec.choice !== "named" || name === spec.requiredName) : []
+  return `You are serving a remote client. Interpret the JSON-lines transcript by its roles and answer its latest turn. Use structured native function calls with the offered tool names and parameters, not textual tool markers or simulated results. The client alone executes tools; wait for its actual results. Available client function names: ${JSON.stringify(names)}. Do not invent functions or use Comate built-in tools. If an operation has no equivalent offered function, explain the limitation. ${choice} ${spec.parallel ? "" : "Call at most one function."}`
 }
 const textContent = content => typeof content === "string" ? content : Array.isArray(content) ? content.map(part => str(part?.text)).join("") : str(content?.text)
 
@@ -156,7 +157,7 @@ export function cloudHooks(hooks, options = {}, shared) {
         const contexts = await upload(requestImages, a.license, signal)
         // Mutating POSTs are never retried silently: an ambiguous network error
         // must not submit the same user query or tool result twice.
-        const response = await post(API + "/execute", {
+        const executeInput = {
           ...common, conversationId, taskId, query, modelKey: model, modelProvider: "Auto",
           tools: request.toolSpec.enabled ? request.toolSpec.tools.map(tool => ({ ...tool, function: { ...tool.function, name: request.toolSpec.byName.get(tool.function.name) } })) : [],
           uploadBaseInfo: { os: process.platform === "win32" ? "windows" : process.platform, ideType: "zulucli", ideName: "zulucli", ideVersion: VERSION, extName: "zulucli", extVersion: VERSION, license: a.license, username: a.who ?? "", pluginVersion: VERSION, triggerSource: "API" },
@@ -164,9 +165,20 @@ export function cloudHooks(hooks, options = {}, shared) {
           contexts, toolUseResults: native.results, subAgents: [], subAgentsChanged: false,
           systemReminder: instructions,
           extendUserQueryInfo: { commands: [], skills: [], subagents: [], rules: [] }, extend: { isMultiWorkspace: false, useWorkflow: false }, sendMode: "normal", isFirstQuery: !previous, enableMemory: false,
-        }, a.license, signal, true)
+        }
+        const response = await post(API + "/execute", executeInput, a.license, signal, true)
+        // This is a new native result turn after an actual local validation
+        // failure, never a replay/retry of a query or an executed client tool.
+        const correctUnoffered = async results => {
+          signal.throwIfAborted()
+          const corrected = await post(API + "/execute", {
+            ...executeInput, query: "", contexts: [], toolUseResults: results,
+            isFirstQuery: false, isUserQuery: false,
+          }, a.license, signal, true)
+          return corrected.body
+        }
         const nativeCalls = []
-        const adapted = new Response(cloudBody(response.body, request.toolSpec, nativeCalls, controller, signal, options.streamIdle, usage), { headers: { "content-type": "text/event-stream" } })
+        const adapted = new Response(cloudBody(response.body, request.toolSpec, nativeCalls, controller, signal, options.streamIdle, usage, correctUnoffered), { headers: { "content-type": "text/event-stream" } })
         let committed = false
         const cleanup = () => { if (!committed && key) sessions.delete(key); if (acquired) busy.delete(key) }
         const taskControl = {
@@ -235,47 +247,65 @@ async function* timedBytes(body, controller, signal, { firstMs = 300_000, idleMs
   }
 }
 
-function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage) {
-  const live = new Map(), completed = []
-  let hasText = false
+function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, correctUnoffered) {
   const encoder = new TextEncoder()
   async function* convert() {
     try {
-      for await (const event of events(timedBytes(body, controller, signal, idle))) {
-        const content = event?.content
-        if (!content || typeof content.type !== "string") throw new Error("Unexpected Comate cloud event envelope")
-        const detail = content.detail ?? {}
-        if (["EXCEPTION", "QUOTA_EXCEED", "TOOL"].includes(content.type)) throw new Error(`Comate cloud stopped: ${content.type}`)
-        if (content.type.startsWith("FUNCTION_CALL_")) {
-          for (const tool of detail.toolUse ?? []) {
-            if (!str(tool.id)) throw new Error("Cloud tool call has no id")
-            const call = live.get(tool.id) ?? { id: tool.id, name: str(tool.name), input: {} }
-            if (tool.name) call.name = tool.name
-            for (const [key, value] of Object.entries(tool.input ?? {})) call.input[key] = content.type === "FUNCTION_CALL_PARAMS_APPEND" && typeof value === "string" ? (call.input[key] ?? "") + value : value
-            live.set(tool.id, call)
-            if (content.type === "FUNCTION_CALL_END") {
-              const clientCall = clientToolCall(call, spec)
-              usage.tool(call)
-              nativeCalls.push({ ...call, clientName: spec.byName.get(clientCall.name) ?? clientCall.name, clientInput: clientCall.input })
-              completed.push({ name: clientCall.name, arguments: clientCall.input })
-              live.delete(tool.id)
-              if (completed.length > 64) throw new Error("Too many cloud tool calls")
+      for (let correction = 0; ; correction++) {
+        const live = new Map(), completed = [], rejected = []
+        let hasText = false, results
+        for await (const event of events(timedBytes(body, controller, signal, idle))) {
+          const content = event?.content
+          if (!content || typeof content.type !== "string") throw new Error("Unexpected Comate cloud event envelope")
+          const detail = content.detail ?? {}
+          if (["EXCEPTION", "QUOTA_EXCEED", "TOOL"].includes(content.type)) throw new Error(`Comate cloud stopped: ${content.type}`)
+          if (content.type.startsWith("FUNCTION_CALL_")) {
+            for (const tool of detail.toolUse ?? []) {
+              if (!str(tool.id)) throw new Error("Cloud tool call has no id")
+              const call = live.get(tool.id) ?? { id: tool.id, name: str(tool.name), input: {} }
+              if (tool.name) call.name = tool.name
+              for (const [key, value] of Object.entries(tool.input ?? {})) call.input[key] = content.type === "FUNCTION_CALL_PARAMS_APPEND" && typeof value === "string" ? (call.input[key] ?? "") + value : value
+              live.set(tool.id, call)
+              if (content.type === "FUNCTION_CALL_END") {
+                try {
+                  const clientCall = clientToolCall(call, spec)
+                  nativeCalls.push({ ...call, clientName: spec.byName.get(clientCall.name) ?? clientCall.name, clientInput: clientCall.input })
+                  completed.push({ name: clientCall.name, arguments: clientCall.input })
+                } catch (error) {
+                  if (!(error instanceof UnofferedToolError)) throw error
+                  rejected.push({ call, error })
+                }
+                usage.tool(call)
+                live.delete(tool.id)
+                if (completed.length + rejected.length > 64) throw new Error("Too many cloud tool calls")
+              }
+            }
+          }
+          if (content.type === "ANSWER") {
+            if (str(detail.reasoningDelta)) { usage.reasoning(detail.reasoningDelta); yield frame({ kind: "thinking-delta", delta: detail.reasoningDelta }) }
+            if (str(detail.delta)) { usage.text(detail.delta); hasText = true; yield frame({ kind: "text-delta", delta: detail.delta }) }
+            if (detail.end === true) {
+              if (live.size) throw new Error("Comate ended with incomplete tool arguments")
+              if (rejected.length) {
+                // Never discard/replay a valid pending call, violate the caller's
+                // parallel limit, or keep correcting an uncooperative model.
+                if (correction || completed.length || !spec.parallel && rejected.length > 1) throw rejected[0].error
+                results = rejected.map(({ call, error }) => ({
+                  id: call.id, name: call.name, params: call.input, success: false,
+                  message: `${error.message}. Validation rejected this call before execution; no client tool ran. ${nativeInstructions(spec)}`,
+                }))
+                break
+              }
+              if (!hasText && !completed.length) throw new Error("Comate completed without an answer or tool call")
+              if (completed.length) yield frame({ kind: "text-delta", delta: spec.startTag + JSON.stringify(completed) + spec.endTag })
+              yield frame({ type: "task_done", status: "completed" })
+              return
             }
           }
         }
-        if (content.type === "ANSWER") {
-          if (str(detail.reasoningDelta)) { usage.reasoning(detail.reasoningDelta); yield frame({ kind: "thinking-delta", delta: detail.reasoningDelta }) }
-          if (str(detail.delta)) { usage.text(detail.delta); hasText = true; yield frame({ kind: "text-delta", delta: detail.delta }) }
-          if (detail.end === true) {
-            if (live.size) throw new Error("Comate ended with incomplete tool arguments")
-            if (!hasText && !completed.length) throw new Error("Comate completed without an answer or tool call")
-            if (completed.length) yield frame({ kind: "text-delta", delta: spec.startTag + JSON.stringify(completed) + spec.endTag })
-            yield frame({ type: "task_done", status: "completed" })
-            return
-          }
-        }
+        if (!results) throw new Error("Comate stream ended before its completion event")
+        body = await correctUnoffered(results)
       }
-      throw new Error("Comate stream ended before its completion event")
     } catch (error) { yield frame({ type: "task_failed", errorMessage: error.message }) }
   }
   const iterator = convert()
