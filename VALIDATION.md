@@ -1,3 +1,40 @@
+# 0.5.1 Search output-mode semantics — 2026-11-03
+
+Cause: field-only grep translation rejected output_mode when the caller offered a fixed
+content-search tool. Dropping that field would also be wrong for filenames-only or counts.
+The new tool-search strategy runs after exact/equivalent tools cannot express a request.
+Rich declared Grep tools retain their modes; fixed-content grep receives only equivalent
+content requests. Other output modes/options become safely quoted rg commands on an
+actually offered bash/Bash/exec_command capability, executed under the caller's controls.
+No implicit privilege flags or plugin-side command execution are introduced.
+
+Supported modes: content, files_with_matches and count; supported options include glob/type,
+case, line numbers, context, multiline and output pagination. No matches (rg 1) are success;
+regex/IO failures (rg 2+) remain errors, including through pagination. Shell-derived searches
+require ripgrep in the caller environment. Unknown options or no compatible capability are
+explicit failures. Native IDs/names/arguments remain unchanged for cloud result correlation.
+
+141 package tests passed with the explicit production Magpie host/Bun, 0 failures/skips.
+New tests cover mode preservation across Harness/Claude/Codex-style declarations, three
+real shell output modes, no matches, malformed regex, offset/head_limit, shell metacharacters,
+and both streamed/non-streamed result correlation.
+
+Real installed DeepSeek Harness verification:
+- Controlled upstream fixture emitted all three native output modes through the actual
+  adapter and real Harness tools: grep returned two content matches; bash returned the two
+  filenames; bash returned per-file counts of one. All three actual results completed,
+  final SEARCH_MODES_OK, process exit 0. Only the vendor response was simulated.
+- Live Comate GLM-5.3-Flash through the actual Magpie gateway completed the same scratch-only
+  search request. It produced two bash calls (filenames, counts) and a grep content call;
+  all three client results completed and the final answer reported all three modes correctly.
+  Process exit 0. Temporary workspaces and model overlays were removed afterwards.
+
+The fix is a separately tested capability strategy rather than removing unknown parameters
+from all tools. Existing cloud-only, no-total-deadline, image, session and caller execution
+policies are unchanged. Earlier validation below remains historical.
+
+---
+
 # 0.5.0 Schema-directed cross-client tool adaptation — 2026-11-03
 
 The todos failure belongs to parameter representation, in addition to the native/client name

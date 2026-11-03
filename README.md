@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.0`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.1`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -53,7 +53,8 @@ Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼�
 
 插件按本次请求的工具目录工作，不依赖应用名称或固定的全局工具表。
 `tool-adapter.mjs` 负责有序策略选择与结果关联；`tool-profiles.mjs` 声明等价能力及字段映射；
-`tool-schema.mjs` 按客户端声明规范化参数并检查基础约束。新增客户端通常只需增加能力描述与回归测试。
+`tool-schema.mjs` 按客户端声明规范化参数并检查基础约束。`tool-search.mjs` 处理搜索输出模式和选项语义。
+新增客户端通常只需增加能力描述或单独的策略及回归测试。
 
 | 能力 | 已覆盖的客户端声明形式 |
 | --- | --- |
@@ -69,6 +70,11 @@ Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼�
 
 仅当前请求实际提供的工具才可能被选中，不创建不存在的能力，不降级绕过审批。
 流式与非流式使用同一适配器，回传云端时保留原始工具名、参数及调用 ID，客户端参数转换不污染原始记录。
+搜索支持 `content`、`files_with_matches`、`count`。优先使用能完整表达请求的客户端搜索工具；
+Harness 固定内容搜索可等价接收 `content`，其他模式或额外选项则交给客户端已声明的 shell 执行转义后的 `rg`。
+shell 路径需要客户端环境中可用的 ripgrep；插件不会在后台安装它或直接在本机执行搜索。
+支持 glob/type、大小写、行号、上下文、跨行和输出分页；无匹配正常返回，非法正则及其他执行错误保留。
+未知选项和没有可用表达能力的请求仍明确报错，不把文件列表、计数和内容三种语义混为一谈。
 这里的 Codex/Claude Code 格式已通过兼容性测试；真实应用的完整联调范围以 VALIDATION.md 为准。
 
 ### 图片
@@ -103,7 +109,7 @@ MAGPIE_HOST=/absolute/path/to/host.js MAGPIE_BUN=/absolute/path/to/bun npm test
 旧 `models.test.mjs`、`protocol-transport.test.mjs` 和 `integration.test.mjs` 对它的测试不能作为新云端传输验收。
 协议及发现测试继续覆盖两代实现的共有行为。
 
-npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs、tool-adapter.mjs、tool-profiles.mjs、tool-schema.mjs、images.mjs、protocol.mjs、discovery.mjs、package.json。
+npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs、tool-adapter.mjs、tool-profiles.mjs、tool-schema.mjs、tool-search.mjs、images.mjs、protocol.mjs、discovery.mjs、package.json。
 没有安装器、二进制或生命周期脚本。当前使用 GitHub 分发；未来若发布 npm，也使用个人作用域包名。
 详见源码中的 [VALIDATION.md](./VALIDATION.md)。
 

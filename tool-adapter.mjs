@@ -4,6 +4,7 @@ const quote = text => "'" + text.replaceAll("'", "'\\''") + "'"
 
 import { normalizeArguments } from "./tool-schema.mjs"
 import { SHELL_TOOLS, RENAMED_TOOLS } from "./tool-profiles.mjs"
+import { isSearchCall, searchCall } from "./tool-search.mjs"
 
 const declared = spec => spec.tools.map(tool => ({ name: spec.byName.get(tool.function.name), schema: tool.function.parameters ?? {} }))
 const finish = (target, input) => ({ name: target.name, input: normalizeArguments(input, target.schema) })
@@ -35,22 +36,25 @@ export function clientToolCall(call, spec) {
   const name = spec.byName.get(call.name)
   const direct = targets.find(target => target.name === name)
   const profile = RENAMED_TOOLS.find(profile => profile.native.includes(call.name))
-  if (direct) return finish(direct, profile && direct.schema.properties ? renameFields(call.input, profile, direct) : call.input)
+  const errors = []
+  if (direct) {
+    try { return finish(direct, profile && direct.schema.properties ? renameFields(call.input, profile, direct) : call.input) } catch (error) { errors.push(error.message) }
+  }
   if (profile) {
-    const errors = []
     for (const candidate of profile.client) {
       const target = targets.find(target => target.name === candidate)
       if (!target) continue
       try { return finish(target, renameFields(call.input, profile, target)) } catch (error) { errors.push(error.message) }
     }
-    if (errors.length) throw new Error(errors.join("; "))
   }
   const strategy = STRATEGIES.find(strategy => strategy.matches(call))
   if (strategy) return strategy.adapt(call, spec)
+  if (errors.length) throw new Error(errors.join("; "))
   throw new Error(`Comate requested a tool the client did not offer: ${call.name}`)
 }
 
 const STRATEGIES = [
+  { matches: isSearchCall, adapt: searchCall },
   { matches: call => call.name === "run_command", adapt: commandCall },
   { matches: call => call.name === "list_dir", adapt: directoryCall },
 ]

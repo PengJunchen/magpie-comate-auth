@@ -1,6 +1,6 @@
 {
   "name": "@pengjunchen/magpie-comate-auth",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Baidu Comate cloud provider with images, native session continuation and client-owned tools",
   "type": "module",
   "main": "./index.mjs",
@@ -13,6 +13,7 @@
     "tool-adapter.mjs",
     "tool-schema.mjs",
     "tool-profiles.mjs",
+    "tool-search.mjs",
     "protocol.mjs",
     "discovery.mjs",
     "README.md"
