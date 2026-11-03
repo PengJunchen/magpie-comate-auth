@@ -1,3 +1,62 @@
+# 0.5.3 Context-usage estimates — 2026-11-03
+
+Cause: the Comate execute SSE observed in an independent GLM-4.7 cloud probe
+contained ANSWER text/reasoning and terminal events, but no numeric token usage.
+Neither the old JSON nor streaming adapter emitted standard OpenAI usage. A
+read-only audit of the affected Harness session found 44 consecutive assistant
+steps with input/output/total tokens all zero, with a configured 262,144-token
+context capacity. Missing counters were therefore displayed as zero occupancy.
+
+The cloud adapter now meters the complete client-visible history, offered tool
+schemas and adapter instructions, even when native continuation uploads only
+incremental input/results. Text, reasoning and native tool arguments contribute
+to output. Image base64 is excluded; each historical image reserves 1,024 tokens.
+ASCII/BMP/astral density is explicitly heuristic, not a model-specific tokenizer.
+Reasoning is included once in completion_tokens and also exposed as a detail;
+unknown cache hits are not invented. Hidden cloud prompts/compaction remain
+unobservable, so these counters cannot establish actual billing or exact cloud
+occupancy. Capacity still comes from the client configuration.
+
+Successful JSON replies contain usage. Streaming replies emit one usage-only
+chunk before DONE (unless include_usage is explicitly false). Failures/cancelled
+streams do not emit successful usage. usage.comate_usage and the response header
+label the source estimated. Intermediaries may retain only standard counters;
+README states that limitation rather than claiming every client shows the label.
+
+147 package tests passed, 0 failed/skipped, with the explicit installed Magpie
+production host/Bun. Six new tests cover full-history/tool-result accounting,
+native incremental continuation, stream/JSON parity, chunk fragmentation,
+reasoning, image byte-size independence and error/opt-out behavior. Existing
+local-fixture tests remain historical protocol coverage, not live cloud proofs.
+
+Live isolated installed-host/Harness check used Comate DeepSeek-v4.1-Flash,
+the actual installed production Magpie Bun host and DeepSeek Harness headless
+runner. The client read a scratch file via its own read tool and returned the
+exact contents, exit 0. Harness recorded 13,049/117 input/output tokens for the
+tool call and 13,271/33 for the result round. With the test's 128,000 capacity,
+the prompt-side reading computes to 10%, instead of zero. These are estimates,
+not a screenshot assertion about the user's existing desktop session.
+
+A separate complete gateway check used the installed Magpie 0.1.2648 binary,
+an isolated XDG_CONFIG_HOME, a separate MAGPIE_ADDR, the local 0.5.3 plugin and
+a short-lived restricted gateway key. Real Comate DeepSeek-v4.1-Flash served
+all three requests with HTTP 200, including the title side request. Harness
+executed its read tool, returned the exact scratch-file result and exited 0.
+The two main rounds reached Harness as 13,049/98 and 13,252/38 input/output
+tokens. The gateway preserved both standard counters and the estimated-source
+extension. The final prompt-side reading computes to 10% at the test's 128,000
+capacity. Temporary gateway, auth/config files and scratch files were removed.
+
+The new ZIP and TGZ contain exactly the 14 allowlisted payload files including
+usage.mjs; independent ZIP CRC, archive/source byte equality and SHA-256 checks
+passed. No test fixtures, diagnostic credentials or local session logs ship.
+
+The user's active plugin/configuration and session logs were not changed or
+reloaded during verification. Existing zero-valued logs are not backfilled;
+usage becomes available only on new requests after activating the update.
+
+---
+
 # 0.5.2 Build artifacts and installation guide — 2026-11-03
 
 This update changes packaging and documentation only. Runtime modules are unchanged from

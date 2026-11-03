@@ -6,6 +6,7 @@ import { buildQuery, events } from "./protocol.mjs"
 import { normalizeMessages, imagesFrom } from "./images.mjs"
 import { clientToolCall } from "./tool-adapter.mjs"
 import { SESSION_HEADER, sessionKey, historyHash, catalogHash, continuation, nativeResults } from "./cloud-session.mjs"
+import { createUsageMeter } from "./usage.mjs"
 
 const ORIGIN = "https://comate.baidu.com"
 const API = "/api/aidevops/autocomate/rest/autowork/v2"
@@ -129,6 +130,9 @@ export function cloudHooks(hooks, options = {}, shared) {
         const native = previous ? nativeResults(previous, normalized.messages, normalized.images, textContent) : { results: [], indices: new Set() }
         const newMessages = normalized.messages.slice(from).filter((message, offset) => message.role !== "assistant" && !native.indices.has(from + offset))
         const instructions = nativeInstructions(request.toolSpec)
+        // Meter the full visible history, even when native continuation sends
+        // only a delta. Never count the image's base64 transport as text.
+        const usage = createUsageMeter(normalized.messages, request.toolSpec.tools, instructions, normalized.images)
         const query = previous ? newMessages.map(message => JSON.stringify(message)).join("\n") : instructions + "\n\nConversation transcript:\n" + normalized.messages.map(message => JSON.stringify(message)).join("\n")
         if (!query && !native.results.length) throw new Error("The continuation contains no new input or tool results")
         const requestImages = imagesFrom(normalized.images, from, native.indices)
@@ -162,11 +166,12 @@ export function cloudHooks(hooks, options = {}, shared) {
           extendUserQueryInfo: { commands: [], skills: [], subagents: [], rules: [] }, extend: { isMultiWorkspace: false, useWorkflow: false }, sendMode: "normal", isFirstQuery: !previous, enableMemory: false,
         }, a.license, signal, true)
         const nativeCalls = []
-        const adapted = new Response(cloudBody(response.body, request.toolSpec, nativeCalls, controller, signal, options.streamIdle), { headers: { "content-type": "text/event-stream" } })
+        const adapted = new Response(cloudBody(response.body, request.toolSpec, nativeCalls, controller, signal, options.streamIdle, usage), { headers: { "content-type": "text/event-stream" } })
         let committed = false
         const cleanup = () => { if (!committed && key) sessions.delete(key); if (acquired) busy.delete(key) }
         const taskControl = {
           controller, cancelled: false, cleanup,
+          usage: () => usage.value(),
           finish() { controller.abort() },
           async cancel() { this.cancelled = true; cleanup(); controller.abort(); await adapted.body.cancel().catch(() => {}) },
           succeed(calls) {
@@ -230,7 +235,7 @@ async function* timedBytes(body, controller, signal, { firstMs = 300_000, idleMs
   }
 }
 
-function cloudBody(body, spec, nativeCalls, controller, signal, idle) {
+function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage) {
   const live = new Map(), completed = []
   let hasText = false
   const encoder = new TextEncoder()
@@ -250,6 +255,7 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle) {
             live.set(tool.id, call)
             if (content.type === "FUNCTION_CALL_END") {
               const clientCall = clientToolCall(call, spec)
+              usage.tool(call)
               nativeCalls.push({ ...call, clientName: spec.byName.get(clientCall.name) ?? clientCall.name, clientInput: clientCall.input })
               completed.push({ name: clientCall.name, arguments: clientCall.input })
               live.delete(tool.id)
@@ -258,8 +264,8 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle) {
           }
         }
         if (content.type === "ANSWER") {
-          if (str(detail.reasoningDelta)) yield frame({ kind: "thinking-delta", delta: detail.reasoningDelta })
-          if (str(detail.delta)) { hasText = true; yield frame({ kind: "text-delta", delta: detail.delta }) }
+          if (str(detail.reasoningDelta)) { usage.reasoning(detail.reasoningDelta); yield frame({ kind: "thinking-delta", delta: detail.reasoningDelta }) }
+          if (str(detail.delta)) { usage.text(detail.delta); hasText = true; yield frame({ kind: "text-delta", delta: detail.delta }) }
           if (detail.end === true) {
             if (live.size) throw new Error("Comate ended with incomplete tool arguments")
             if (!hasText && !completed.length) throw new Error("Comate completed without an answer or tool call")

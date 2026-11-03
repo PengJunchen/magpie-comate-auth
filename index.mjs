@@ -224,7 +224,12 @@ function chunkEncoder(chat, uuid) {
     model,
     choices: [{ index: 0, delta, finish_reason: finish }],
   })}\n\n`
-  return { encode, done: "data: [DONE]\n\n" }
+  const usage = value => `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [], usage: value })}\n\n`
+  return { encode, usage, done: "data: [DONE]\n\n" }
+}
+
+function usageHeaders(task) {
+  return task.usage ? { "X-Comate-Usage-Source": "estimated" } : {}
 }
 
 async function finished(chat, response, task, toolSpec, uuid, license) {
@@ -244,10 +249,11 @@ async function finished(chat, response, task, toolSpec, uuid, license) {
   const completion = completionResult(chat, result, toolSpec, uuid)
   if (completion.error) { task.cleanup(); return errorResponse(502, completion.error, "kept", license) }
   task.succeed?.(completion.toolCalls)
+  if (task.usage) completion.body.usage = task.usage()
   task.cleanup()
   return new Response(JSON.stringify(completion.body), {
     status: 200,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...usageHeaders(task) },
   })
 }
 
@@ -306,6 +312,7 @@ function streamed(chat, response, task, toolSpec, uuid, license) {
         }
       }
       yield chunks.encode({}, final.calls.length ? "tool_calls" : "stop")
+      if (task.usage && chat.stream_options?.include_usage !== false) yield chunks.usage(task.usage())
       yield chunks.done
     } catch (error) {
       if (task.cancelled) return
@@ -351,7 +358,7 @@ function streamed(chat, response, task, toolSpec, uuid, license) {
     },
   }, { highWaterMark: 0 }), {
     status: 200,
-    headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+    headers: { "content-type": "text/event-stream", "cache-control": "no-cache", ...usageHeaders(task) },
   })
 }
 

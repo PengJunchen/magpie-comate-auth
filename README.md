@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.2`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.3`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.2.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.3.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.2.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.2.tgz
+├── magpie-comate-auth-0.5.3.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.3.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -180,6 +180,28 @@ shell 路径需要客户端环境中可用的 ripgrep；插件不会在后台安
 云端路径避免了旧桌面执行端点，但这不等同于服务端所有工具均关闭或社区已接受新方案。
 真实 Codex/Claude Code 完整网关验收、维护者重新审核仍需分别记录。
 
+### Token 用量与上下文百分比
+
+当前实测的 Comate 云端 execute 流不返回 token 用量。旧版本也没有向客户端提供 `usage`，
+DeepSeek Harness 因而将每步用量记为 0，长任务的上下文指示器也可能一直显示 0%。
+从 `0.5.3` 开始，插件提供**明确标注来源的估算值**，用于上下文参考，不是云端实测或计费凭据。
+
+- 非流式响应包含标准 `usage.prompt_tokens`、`completion_tokens`、`total_tokens`。
+- 流式在成功结束后、`[DONE]` 前发送一次 `choices: []` 的 usage chunk；默认发送，
+  显式设置 `stream_options.include_usage: false` 可关闭。失败或取消不会输出成功用量。
+- `usage.comate_usage` 中 `source: "estimated"`、`method: "unicode-density-v1"` 标注估算来源，
+  响应头另有 `X-Comate-Usage-Source: estimated`。网关或客户端可能只保留标准计数，不显示来源标签。
+
+输入按**完整可见历史**、工具定义和适配提示估算，包含历史工具调用及返回结果；原生续聊只上传增量时，
+仍计算保留的上下文。输出包含正文、推理及原生工具调用参数，推理同时列在
+`completion_tokens_details.reasoning_tokens` 中，已包含于输出总数，不重复相加。
+不声明未知的缓存命中。估算规则为 ASCII 每 4 字符约 1 token、其他 BMP 字符约 1 token、
+补充平面字符约 2 token；每张历史图片固定预留 1,024 token，不按 base64 长度计价。
+
+这不是各模型的专用 tokenizer：云端隐藏提示、自动压缩、图片切片及真实缓存均不可见，数值可能偏高或偏低。
+百分比还依赖客户端配置的模型容量；插件没有按模型名猜测容量。已有日志中的零值不会被回写，
+更新生效后的新请求才会带用量。请在长任务完成后更新插件并开启新请求，避免中途替换插件宿主。
+
 ## 验证
 
 ```sh
@@ -188,12 +210,13 @@ MAGPIE_HOST=/absolute/path/to/host.js MAGPIE_BUN=/absolute/path/to/bun npm test
 ```
 
 `cloud.test.mjs` 和 `cloud-features.test.mjs` 验证新云端传输、原生续聊、图片及长任务，`cloud-host.test.mjs` 使用显式指定的生产 Magpie 宿主和假云端服务。
+`usage.test.mjs` 验证完整历史、工具/图片/推理估算和流式用量；0.5.3 已完成本机独立 Magpie 网关到真实 Comate、再到 Harness CLI 的用量联调。
 测试不会自行寻找邻近仓库。没有显式宿主/Bun 时宿主测试跳过。
 `local-transport.fixture.mjs` 仅保留旧本地传输回归，未由生产入口导入，也不进入 npm 包。
 旧 `models.test.mjs`、`protocol-transport.test.mjs` 和 `integration.test.mjs` 对它的测试不能作为新云端传输验收。
 协议及发现测试继续覆盖两代实现的共有行为。
 
-npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs、tool-adapter.mjs、tool-profiles.mjs、tool-schema.mjs、tool-search.mjs、images.mjs、protocol.mjs、discovery.mjs、package.json。
+npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs、usage.mjs、tool-adapter.mjs、tool-profiles.mjs、tool-schema.mjs、tool-search.mjs、images.mjs、protocol.mjs、discovery.mjs、package.json。
 没有安装器、二进制或生命周期脚本。当前使用 GitHub 分发；未来若发布 npm，也使用个人作用域包名。
 详见源码中的 [VALIDATION.md](./VALIDATION.md)。
 
