@@ -1,3 +1,36 @@
+# 0.4.2 DeepSeek Harness run_command interoperability — 2026-11-03
+
+Primary public maintenance repository: https://github.com/PengJunchen/magpie-comate-auth
+(non-fork, default branch main, GitHub topic magpie-plugin). The original community-fork
+branch remains available as historical provenance; official PR #77 remains closed.
+
+Reproduced the exact new run_command failure using the installed DeepSeek Harness headless
+runner, the real Magpie gateway and Comate GLM-5.3-Flash: 0.4.1 exited 1 before any client call.
+The caller offers bash, while Comate can emit its own run_command even though the original
+client tool name was supplied. This is the same naming mismatch category as list_dir.
+
+The adapter now converts run_command to an actually offered, schema-compatible bash/Bash.
+It preserves the command string, maps an explicit working directory, millisecond timeout
+and background option only when the client schema supports them, supplies the required
+plain description, and never injects sandbox_permissions or executes commands inside the
+plugin. Ambiguous/unknown execution options fail instead of silently changing semantics.
+Native result correlation retains run_command, its original ID and its original parameters.
+The list_dir conversion and all cloud-only execution controls remain in place.
+
+Real fixed Harness run: session session-3b2de83f-bb55-457f-aeb2-a92e4feb5043,
+client bash call_04d52fec5fd74a099759adba executed printf HARNESS_COMMAND_OK,
+result status completed with the actual expected output, followed by a final answer and
+turn_end completed; process exit 0. The scratch workspace and per-run model patch were
+removed after the test. No global Harness model configuration was changed.
+
+114 package tests passed, 0 failed, 0 skipped with explicit production Magpie host/Bun.
+New cases cover streamed and non-streamed run_command result correlation, directory/time
+and background mapping, none/missing tools, ambiguity, unknown options and permission flags.
+This is a verified shell/directory interoperability fix, not a claim that every Comate-native
+tool can be translated to every client. Earlier validation below is historical.
+
+---
+
 # 0.4.1 DeepSeek Harness list_dir interoperability — 2026-11-03
 
 The installed DeepSeek Harness headless runner reproduced the user's exact failure through
