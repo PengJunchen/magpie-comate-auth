@@ -1,3 +1,54 @@
+# 0.5.0 Schema-directed cross-client tool adaptation — 2026-11-03
+
+The todos failure belongs to parameter representation, in addition to the native/client name
+mismatches fixed in 0.4.x: Comate supplied a JSON-encoded string, but the declared client
+schema required an array. Exact offered tool names previously bypassed conversion entirely.
+The supplied four-entry Chinese todo payload is now covered verbatim by regression tests.
+
+The adaptation layer is split into three independently testable parts:
+
+- tool-adapter.mjs: ordered exact-name, equivalent-capability and derived-operation strategies;
+  applies only tools actually declared in this request and retains original native correlation.
+- tool-profiles.mjs: declarative command, filesystem/search and task-list field equivalences,
+  including bash/Bash/exec_command and todos/content versus update_plan plan/step.
+- tool-schema.mjs: recursive schema-directed decoding of valid JSON strings into arrays,
+  objects and typed scalar fields. String fields remain strings. Known required, enum,
+  additionalProperties and basic numeric/array constraints are checked. Ambiguity and
+  malformed values are errors, not guessed repairs. This is not a full JSON Schema engine;
+  strict:true is still unsupported and caller validation/permissions remain authoritative.
+
+132 package tests passed, 0 failed, 0 skipped with explicit installed Magpie host and Bun.
+Coverage includes the reported todos payload, Harness/Claude-style todo names, Codex
+update_plan plan/step projection, command/cmd and timeout mappings, filesystem/search names,
+nested JSON decoding, union ambiguity, malformed/invalid enum/missing required values,
+prototype safety, integer precision and streamed/non-streamed native-result correlation.
+Codex/Claude-specific fixtures test declared formats; no claim of complete live application
+acceptance for those two clients is made.
+
+## Real installed DeepSeek Harness checks
+
+1. Deterministic malformed-vendor fixture: the real Harness headless runner consumed this
+   plugin's actual streaming adapter, with only the cloud service simulated to emit encoded
+   todos. Harness received a true array and executed todo_write successfully:
+   call_74f39f000c0e471c96ef3eb7, result completed, final TODO_ARRAY_OK, process exit 0.
+   This is real client validation/execution with a controlled upstream, not a live cloud trial.
+2. Live Comate GLM-5.3-Flash through the real Magpie gateway: session
+   session-78efb93b-c9df-4943-a2cb-873b6cd6ba41 completed a combined scratch-only task.
+   Calls were todo_write, bash directory listing, read, bash printf and todo_write completion;
+   all five tool results were completed, then the model returned the actual scratch file
+   contents and HARNESS_COMPAT_OK. Process exit 0. No project files were edited.
+3. The real installed Magpie nonofficial discovery API returned this public, non-fork
+   repository under topic magpie-plugin, using the GitHub install spec. Initial GitHub
+   discovery timed out; retrying the real endpoint succeeded (268 repositories).
+   No market cache entries were fabricated. Normal UI metadata can remain cached ten minutes.
+
+The original cloud-only boundary, no turn-wide deadline, image support, caller approval,
+original native IDs/params and failure cleanup remain intact. The registry is extensible;
+it intentionally does not claim every vendor operation is semantically interchangeable.
+Earlier validation sections below are historical.
+
+---
+
 # 0.4.2 DeepSeek Harness run_command interoperability — 2026-11-03
 
 Primary public maintenance repository: https://github.com/PengJunchen/magpie-comate-auth

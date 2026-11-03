@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.4.2`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.0`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -49,6 +49,28 @@ Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼�
 推理可返回，但不转发推理档位、temperature、max_tokens 等生成控制。
 目录仅来自当前账号的云端实时列表，图片能力按该列表的 `supportImage` 字段展示；没有固定模型种子。
 
+### 通用工具适配
+
+插件按本次请求的工具目录工作，不依赖应用名称或固定的全局工具表。
+`tool-adapter.mjs` 负责有序策略选择与结果关联；`tool-profiles.mjs` 声明等价能力及字段映射；
+`tool-schema.mjs` 按客户端声明规范化参数并检查基础约束。新增客户端通常只需增加能力描述与回归测试。
+
+| 能力 | 已覆盖的客户端声明形式 |
+| --- | --- |
+| 命令/目录查看 | Harness `bash`、Claude Code `Bash`、Codex `exec_command` 的 `command`/`cmd` 及工作目录字段 |
+| 文件操作 | `read`/`Read`、`write`/`Write`、`edit`/`Edit` 的路径字段；搜索用 `glob`/`Glob`、`grep`/`Grep` |
+| 任务清单 | `todo_write`/`TodoWrite`/`todowrite`，以及 `update_plan` 的 `plan[].step` |
+
+如果 schema 要求数组或对象而模型传来了合法 JSON 字符串，会解码并递归验证；如
+`{"todos":"[{\"content\":\"检查工具\",\"status\":\"pending\"}]"}` 会变成真正的 todos 数组。
+同理可处理声明为数值/布尔值的 JSON 编码标量。声明为字符串的命令、文件内容保持字符串，不按外观猜类型。
+非法 JSON、类型不符、缺少 required 字段、enum 不符、歧义转换，以及无法保留的执行选项会报错。
+这不是完整 JSON Schema 引擎，仍拒绝 `strict:true`；客户端仍负责最终参数和权限验证。
+
+仅当前请求实际提供的工具才可能被选中，不创建不存在的能力，不降级绕过审批。
+流式与非流式使用同一适配器，回传云端时保留原始工具名、参数及调用 ID，客户端参数转换不污染原始记录。
+这里的 Codex/Claude Code 格式已通过兼容性测试；真实应用的完整联调范围以 VALIDATION.md 为准。
+
 ### 图片
 
 支持 PNG、JPEG、WebP、GIF 的内联 base64：OpenAI `image_url` / `input_image`，
@@ -81,7 +103,7 @@ MAGPIE_HOST=/absolute/path/to/host.js MAGPIE_BUN=/absolute/path/to/bun npm test
 旧 `models.test.mjs`、`protocol-transport.test.mjs` 和 `integration.test.mjs` 对它的测试不能作为新云端传输验收。
 协议及发现测试继续覆盖两代实现的共有行为。
 
-npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs、tool-adapter.mjs、images.mjs、protocol.mjs、discovery.mjs、package.json。
+npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs、tool-adapter.mjs、tool-profiles.mjs、tool-schema.mjs、images.mjs、protocol.mjs、discovery.mjs、package.json。
 没有安装器、二进制或生命周期脚本。当前使用 GitHub 分发；未来若发布 npm，也使用个人作用域包名。
 详见源码中的 [VALIDATION.md](./VALIDATION.md)。
 

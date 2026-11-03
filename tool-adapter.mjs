@@ -2,11 +2,60 @@
 // compatible shell tool. Never execute it here or widen caller permissions.
 const quote = text => "'" + text.replaceAll("'", "'\\''") + "'"
 
+import { normalizeArguments } from "./tool-schema.mjs"
+import { SHELL_TOOLS, RENAMED_TOOLS } from "./tool-profiles.mjs"
+
+const declared = spec => spec.tools.map(tool => ({ name: spec.byName.get(tool.function.name), schema: tool.function.parameters ?? {} }))
+const finish = (target, input) => ({ name: target.name, input: normalizeArguments(input, target.schema) })
+
+function renameFields(input, profile, target) {
+  const properties = target.schema.properties ?? {}
+  const output = new Map()
+  for (const [key, value] of Object.entries(input)) {
+    if (key === "explanation" && !Object.hasOwn(properties, key)) continue // Vendor rationale is not an execution option.
+    const mapped = Object.hasOwn(properties, key) ? key : (Object.hasOwn(profile.fields, key) ? profile.fields[key] : undefined)?.find(candidate => Object.hasOwn(properties, candidate))
+    if (!mapped) throw new Error(`Cannot preserve ${key} in the declared ${target.name} tool`)
+    if (output.has(mapped) && JSON.stringify(output.get(mapped)) !== JSON.stringify(value)) throw new Error(`Ambiguous ${mapped} in ${target.name}`)
+    let converted = value
+    if (profile.items && ["todos", "plan"].includes(mapped)) {
+      const items = normalizeArguments(value, { type: "array", items: { type: "object" } })
+      converted = items.map(item => renameFields(item, profile.items, { name: target.name, schema: properties[mapped].items ?? {} }))
+    }
+    output.set(mapped, converted)
+  }
+  return Object.fromEntries(output)
+}
+
+// Ordered strategy registry: exact declared tools, equivalent named
+// capabilities, then derived directory/shell operations. New capabilities
+// belong in the profile table or a separately tested strategy.
 export function clientToolCall(call, spec) {
   if (!spec.enabled) throw new Error(`Comate requested a tool the client did not offer: ${call.name}`)
-  if (spec.byName.has(call.name)) return { name: call.name, input: call.input }
-  if (call.name === "run_command") return commandCall(call, spec)
-  if (call.name !== "list_dir") throw new Error(`Comate requested a tool the client did not offer: ${call.name}`)
+  const targets = declared(spec)
+  const name = spec.byName.get(call.name)
+  const direct = targets.find(target => target.name === name)
+  const profile = RENAMED_TOOLS.find(profile => profile.native.includes(call.name))
+  if (direct) return finish(direct, profile && direct.schema.properties ? renameFields(call.input, profile, direct) : call.input)
+  if (profile) {
+    const errors = []
+    for (const candidate of profile.client) {
+      const target = targets.find(target => target.name === candidate)
+      if (!target) continue
+      try { return finish(target, renameFields(call.input, profile, target)) } catch (error) { errors.push(error.message) }
+    }
+    if (errors.length) throw new Error(errors.join("; "))
+  }
+  const strategy = STRATEGIES.find(strategy => strategy.matches(call))
+  if (strategy) return strategy.adapt(call, spec)
+  throw new Error(`Comate requested a tool the client did not offer: ${call.name}`)
+}
+
+const STRATEGIES = [
+  { matches: call => call.name === "run_command", adapt: commandCall },
+  { matches: call => call.name === "list_dir", adapt: directoryCall },
+]
+
+function directoryCall(call, spec) {
   const allowed = new Set(["target_directory", "path", "directory", "depth", "explanation"])
   if (Object.keys(call.input).some(key => !allowed.has(key))) throw new Error("Comate list_dir contains unsupported options: " + Object.entries(call.input).map(([key,value])=>key+":"+typeof value).join(", "))
   const paths = [call.input.target_directory, call.input.path, call.input.directory].filter(value => value !== undefined)
@@ -17,15 +66,12 @@ export function clientToolCall(call, spec) {
   if (!Number.isSafeInteger(depth) || depth < 1 || depth > 64) throw new Error("Comate list_dir depth must be an integer from 1 to 64")
   const operand = path.startsWith("/") || path.startsWith("./") || path.startsWith("../") || path === "." || path === ".." ? path : "./" + path
   const command = depth === 1 ? `ls -la -- ${quote(path)}` : `find ${quote(operand)} -mindepth 1 -maxdepth ${depth} -print`
-  for (const tool of spec.tools) {
-    const name = spec.byName.get(tool.function.name)
-    if (!["bash", "Bash"].includes(name)) continue
-    const schema = tool.function.parameters, props = schema?.properties
-    if (props?.command?.type !== "string") continue
-    const input = { command }
-    if (props.description?.type === "string") input.description = depth === 1 ? "List immediate directory entries including hidden files" : "List directory entries to the requested depth"
-    if ((schema.required ?? []).some(key => !Object.hasOwn(input, key))) continue
-    return { name, input }
+  for (const profile of SHELL_TOOLS) {
+    const target = declared(spec).find(tool => tool.name === profile.name)
+    if (!target || target.schema.properties?.[profile.command]?.type !== "string") continue
+    const input = { [profile.command]: command }
+    if (target.schema.properties.description?.type === "string") input.description = depth === 1 ? "List immediate directory entries including hidden files" : "List directory entries to the requested depth"
+    try { return finish(target, input) } catch { /* Try another declared compatible shell. */ }
   }
   throw new Error("Comate requested list_dir, but the client offers no compatible directory-list or bash tool")
 }
@@ -37,24 +83,24 @@ function commandCall(call, spec) {
   if (typeof command !== "string" || !command.trim() || command.includes("\0")) throw new Error("Comate run_command requires a nonempty command")
   const directories = [call.input.cwd, call.input.workdir, call.input.working_directory, call.input.target_directory].filter(value => value !== undefined)
   if (directories.some(value => typeof value !== "string" || !value.trim() || value.includes("\0")) || new Set(directories).size > 1) throw new Error("Comate run_command has an invalid or ambiguous working directory")
-  const timeouts = [call.input.timeoutMs, call.input.timeout_ms].filter(value => value !== undefined)
+  const timeouts = [call.input.timeoutMs, call.input.timeout_ms].filter(value => value !== undefined).map(value => normalizeArguments(value, { type: "integer", minimum: 1 }))
   if (timeouts.some(value => !Number.isSafeInteger(value) || value <= 0) || new Set(timeouts).size > 1) throw new Error("Comate run_command has an invalid or ambiguous timeout")
-  const backgrounds = [call.input.run_in_background, call.input.is_background, ...(call.input.should_wait === undefined ? [] : [!call.input.should_wait])].filter(value => value !== undefined)
-  if ((call.input.should_wait !== undefined && typeof call.input.should_wait !== "boolean") || backgrounds.some(value => typeof value !== "boolean") || new Set(backgrounds).size > 1) throw new Error("Comate run_command has an invalid or ambiguous background option")
-  for (const tool of spec.tools) {
-    const name = spec.byName.get(tool.function.name)
-    if (!["bash", "Bash"].includes(name)) continue
-    const schema = tool.function.parameters, props = schema?.properties
-    if (props?.command?.type !== "string") continue
-    const input = { command }
+  const backgrounds = [call.input.run_in_background, call.input.is_background].filter(value => value !== undefined).map(value => normalizeArguments(value, { type: "boolean" }))
+  if (call.input.should_wait !== undefined) backgrounds.push(!normalizeArguments(call.input.should_wait, { type: "boolean" }))
+  if (backgrounds.some(value => typeof value !== "boolean") || new Set(backgrounds).size > 1) throw new Error("Comate run_command has an invalid or ambiguous background option")
+  for (const profile of SHELL_TOOLS) {
+    const target = declared(spec).find(tool => tool.name === profile.name)
+    const props = target?.schema.properties
+    if (props?.[profile.command]?.type !== "string") continue
+    const input = { [profile.command]: command }
     if (props.description?.type === "string") input.description = typeof call.input.description === "string" && call.input.description.trim() ? call.input.description : "Run the requested command in the client"
     if (directories.length) {
-      const key = ["workdir", "cwd"].find(key => props[key]?.type === "string")
+      const key = profile.cwd.find(key => props[key]?.type === "string")
       if (!key) continue
       input[key] = directories[0]
     }
     if (timeouts.length) {
-      const key = ["timeoutMs", "timeout_ms"].find(key => ["number", "integer"].includes(props[key]?.type))
+      const key = profile.timeout.find(key => ["number", "integer"].includes(props[key]?.type))
       if (!key) continue
       input[key] = timeouts[0]
     }
@@ -62,8 +108,7 @@ function commandCall(call, spec) {
       if (props.run_in_background?.type !== "boolean") continue
       input.run_in_background = true
     }
-    if ((schema.required ?? []).some(key => !Object.hasOwn(input, key))) continue
-    return { name, input }
+    try { return finish(target, input) } catch { /* Try another declared compatible shell. */ }
   }
   throw new Error("Comate requested run_command, but the client offers no compatible bash tool for its parameters")
 }
