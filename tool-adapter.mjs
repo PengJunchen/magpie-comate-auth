@@ -60,8 +60,9 @@ const STRATEGIES = [
 ]
 
 function directoryCall(call, spec) {
-  const allowed = new Set(["target_directory", "path", "directory", "depth", "explanation"])
-  if (Object.keys(call.input).some(key => !allowed.has(key))) throw new Error("Comate list_dir contains unsupported options: " + Object.entries(call.input).map(([key,value])=>key+":"+typeof value).join(", "))
+  const allowed = new Set(["target_directory", "path", "directory", "depth", "ignore_globs", "explanation"])
+  const unknown = Object.entries(call.input).filter(([key]) => !allowed.has(key))
+  if (unknown.length) throw new Error("Comate list_dir contains unsupported options: " + unknown.map(([key,value])=>key+":"+typeof value).join(", "))
   const paths = [call.input.target_directory, call.input.path, call.input.directory].filter(value => value !== undefined)
   if (paths.some(value => typeof value !== "string" || !value.trim() || value.includes("\0")) || new Set(paths).size > 1) throw new Error("Comate list_dir contains an invalid or ambiguous directory")
   const path = paths[0] ?? "."
@@ -69,15 +70,69 @@ function directoryCall(call, spec) {
   const depth = typeof rawDepth === "number" ? rawDepth : typeof rawDepth === "string" && /^\d+$/.test(rawDepth) ? Number(rawDepth) : NaN
   if (!Number.isSafeInteger(depth) || depth < 1 || depth > 64) throw new Error("Comate list_dir depth must be an integer from 1 to 64")
   const operand = path.startsWith("/") || path.startsWith("./") || path.startsWith("../") || path === "." || path === ".." ? path : "./" + path
-  const command = depth === 1 ? `ls -la -- ${quote(path)}` : `find ${quote(operand)} -mindepth 1 -maxdepth ${depth} -print`
+  const ignores = directoryIgnores(call.input.ignore_globs)
+  const command = ignores.length ? filteredDirectoryCommand(operand, depth, ignores) : depth === 1 ? `ls -la -- ${quote(path)}` : `find ${quote(operand)} -mindepth 1 -maxdepth ${depth} -print`
   for (const profile of SHELL_TOOLS) {
     const target = declared(spec).find(tool => tool.name === profile.name)
     if (!target || target.schema.properties?.[profile.command]?.type !== "string") continue
     const input = { [profile.command]: command }
-    if (target.schema.properties.description?.type === "string") input.description = depth === 1 ? "List immediate directory entries including hidden files" : "List directory entries to the requested depth"
+    if (target.schema.properties.description?.type === "string") input.description = ignores.length ? "List directory entries to the requested depth, pruning ignored paths" : depth === 1 ? "List immediate directory entries including hidden files" : "List directory entries to the requested depth"
     try { return finish(target, input) } catch { /* Try another declared compatible shell. */ }
   }
   throw new Error("Comate requested list_dir, but the client offers no compatible directory-list or bash tool")
+}
+
+const escapeRegex = text => text.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")
+
+function directoryIgnores(value) {
+  if (value === undefined) return []
+  const patterns = normalizeArguments(value, { type: "array", maxItems: 128, items: { type: "string" } })
+  return patterns.map(pattern => {
+    if (!pattern.length || pattern.length > 4096 || pattern.includes("\0")) throw new Error("Comate list_dir ignore_globs requires nonempty NUL-free glob strings of at most 4096 characters")
+    // A list of exclusion globs, not a gitignore file or an extglob expression.
+    if (pattern.startsWith("!") || /[{}]|[?*+@!]\(/.test(pattern)) throw new Error("Comate list_dir ignore_globs does not support negation, brace expansion or extglobs")
+    const directoryOnly = pattern.endsWith("/")
+    const anchored = pattern.startsWith("/") || pattern.startsWith("./")
+    const glob = pattern.replace(/^(?:\.\/)+|^\//, "").replace(/\/+$/, "")
+    if (!glob || glob.split("/").some(part => part === "." || part === ".." || !part)) throw new Error("Comate list_dir ignore_globs requires paths relative to the listed directory")
+    let regex = !anchored && !glob.includes("/") ? "(.*/)?" : ""
+    for (let i = 0; i < glob.length; i++) {
+      const char = glob[i]
+      if (char === "\\") {
+        if (++i === glob.length) throw new Error("Comate list_dir ignore_globs has an incomplete escape")
+        regex += escapeRegex(glob[i])
+      } else if (char === "*") {
+        let end = i + 1
+        while (glob[end] === "*") end++
+        const globstar = end - i > 1 && (i === 0 || glob[i - 1] === "/") && (end === glob.length || glob[end] === "/")
+        if (globstar && glob[end] === "/") { regex += "([^/]+/)*"; end++ }
+        else regex += globstar ? ".*" : "[^/]*"
+        i = end - 1
+      } else if (char === "?") regex += "[^/]"
+      else if (char === "[") {
+        const end = glob.indexOf("]", i + 1)
+        const content = glob.slice(i + 1, end)
+        if (end < 0 || !content || /[\\/\[\^]/.test(content) || content === "!") throw new Error("Comate list_dir ignore_globs contains an unsupported character class")
+        const characterClass = "[" + (content.startsWith("!") ? "^/" + content.slice(1) : content) + "]"
+        try {
+          if (new RegExp(characterClass).test("/")) throw new Error("class includes a path separator")
+        } catch { throw new Error("Comate list_dir ignore_globs contains an invalid character class") }
+        regex += characterClass
+        i = end
+      } else if (char === "/" && glob.slice(i) === "/**") { regex += "(/.*)?"; break }
+      else regex += escapeRegex(char)
+    }
+    return { regex, directoryOnly }
+  })
+}
+
+function filteredDirectoryCommand(operand, depth, ignores) {
+  const root = operand.replace(/\/+$/, "") || "/"
+  const prefix = escapeRegex(root === "/" ? "/" : root + "/")
+  const predicates = ignores.map(({ regex, directoryOnly }) => `\\( ${directoryOnly ? "-type d " : ""}-regex ${quote(prefix + regex)} \\)`)
+  // BSD and GNU find use different switches for the same ERE dialect. Keep
+  // matching/pruning inside the caller's shell; no new runtime dependency.
+  return `case "$(uname -s)" in Darwin|*BSD|DragonFly) set -- -E ${quote(root)} ;; *) set -- ${quote(root)} -regextype posix-extended ;; esac; find "$@" -mindepth 1 -maxdepth ${depth} \\( ${predicates.join(" -o ")} \\) -prune -o -print`
 }
 
 function commandCall(call, spec) {

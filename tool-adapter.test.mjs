@@ -15,20 +15,21 @@ for(const path of ['.', '/tmp/with spaces', "/tmp/quo'te;$(touch NEVER)", '-flag
 test('none, missing bash, unknown tools, incompatible schemas and unsupported options stay errors',()=>{
  for(const [call,s] of [[{name:'list_dir',input:{}},spec([bash],{tool_choice:'none'})],[{name:'list_dir',input:{}},spec([])],[{name:'delete_file',input:{}},spec()],[{name:'list_dir',input:{recursive:true}},spec()],[{name:'list_dir',input:{path:'a',directory:'b'}},spec()],[{name:'list_dir',input:{path:'a\0b'}},spec()],[{name:'list_dir',input:{}},spec([{...bash,function:{...bash.function,parameters:{properties:{command:{type:'string'}},required:['command','unavailable']}}}])]])assert.throws(()=>clientToolCall(call,s))
 })
-for(const nativeName of ["list_dir","run_command"])for(const stream of [false,true])test(`translated calls correlate client bash results to original cloud ${nativeName} (stream=${stream})`,async()=>{
- const requests=[];let execute=0;const nativeInput=nativeName==='list_dir'?{target_directory:'/tmp/scratch'}:{command:'printf ok'}
+for(const [nativeName,nativeInput] of [["list_dir",{target_directory:'/tmp/scratch'}],["run_command",{command:'printf ok'}],["list_dir",{depth:'2',target_directory:'/tmp/scratch',ignore_globs:'[]'}],["list_dir",{depth:'2',target_directory:'/tmp/scratch',ignore_globs:'["**/node_modules/**",".git"]'}]])for(const stream of [false,true])test(`translated calls correlate client bash results to original cloud ${nativeName} ${JSON.stringify(nativeInput)} (stream=${stream})`,async()=>{
+ const requests=[];let execute=0
  const hooks=await ComateAuthPlugin({}, {fetchImpl:async(url,init)=>{
  const body=JSON.parse(init.body);requests.push({url,body});
  if(url.endsWith('/conversation'))return Response.json({code:0,data:{id:1}})
  if(url.endsWith('/task'))return Response.json({code:0,data:{taskId:2}})
- const events=execute++===0?[{content:{type:'FUNCTION_CALL_START',detail:{toolUse:[{id:'vendor-call',name:nativeName,input:nativeInput}]}}},{content:{type:'FUNCTION_CALL_END',detail:{toolUse:[{id:'vendor-call',name:nativeName,input:{}}]}}},{content:{type:'ANSWER',detail:{end:true}}}]:[{content:{type:'ANSWER',detail:{delta:'listed',end:true}}}]
+ const split=nativeInput.ignore_globs?.length>>1
+ const events=execute++===0?[{content:{type:'FUNCTION_CALL_START',detail:{toolUse:[{id:'vendor-call',name:nativeName,input:{...nativeInput,...(nativeInput.ignore_globs?{ignore_globs:nativeInput.ignore_globs.slice(0,split)}:{})}}]}}},...(nativeInput.ignore_globs?[{content:{type:'FUNCTION_CALL_PARAMS_APPEND',detail:{toolUse:[{id:'vendor-call',input:{ignore_globs:nativeInput.ignore_globs.slice(split)}}]}}}]:[]),{content:{type:'FUNCTION_CALL_END',detail:{toolUse:[{id:'vendor-call',name:nativeName,input:{}}]}}},{content:{type:'ANSWER',detail:{end:true}}}]:[{content:{type:'ANSWER',detail:{delta:'listed',end:true}}}]
  return new Response(events.map(e=>'data: '+JSON.stringify(e)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}})
  }})
  const loader=await hooks.auth.loader(async()=>({type:'api',key:'fake'}));const messages=[{role:'user',content:'list'}];const request=stream=>loader.fetch('https://unused',{headers:{'x-magpie-comate-session':'adapter-test'},body:JSON.stringify({model:'model',messages,tools:[bash],stream})})
  const first=await request(stream);assert.equal(first.status,200);let call
  if(!stream)call=(await first.json()).choices[0].message.tool_calls[0]
  else {const items=(await first.text()).split('\n').filter(l=>l.startsWith('data: {')).map(l=>JSON.parse(l.slice(6))).flatMap(e=>e.choices?.[0]?.delta?.tool_calls??[]);call={...items[0],function:{...items[0].function,arguments:items.map(i=>i.function.arguments??'').join('')}}}
- assert.equal(call.function.name,'bash');assert.match(JSON.parse(call.function.arguments).command,nativeName==='list_dir'?/ls -la/:/printf ok/)
+ assert.equal(call.function.name,'bash');assert.match(JSON.parse(call.function.arguments).command,nativeName==='list_dir'?nativeInput.depth?/find/:/ls -la/:/printf ok/)
  messages.push({role:'assistant',tool_calls:[call]},{role:'tool',tool_call_id:call.id,content:'actual listing'})
  assert.equal((await request(false)).status,200)
  const last=requests.at(-1).body;assert.deepEqual(last.toolUseResults,[{id:'vendor-call',name:nativeName,params:nativeInput,success:true,message:'actual listing'}]);assert.equal(last.isFirstQuery,false)

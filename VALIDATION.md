@@ -1,3 +1,68 @@
+# 0.5.4 Native list_dir ignore_globs — 2026-11-04
+
+## Cause and relationship to 0.5.0
+
+The running Magpie log recorded the reported DeepSeek-v4.1-Flash failure at
+2026-11-03 23:48:37. The installed 0.5.3 adapter matched source commit 2a9b929;
+this was not a stale installation or an overwritten earlier fix. A minimal
+call with depth "2", target_directory ".", and ignore_globs "[]" reproduces
+the exact original error on the baseline. A nonempty JSON array string fails
+in the same way, before decoding or client execution.
+
+The original directory adapter in 3478aec already accepts numeric depth strings.
+Version 0.5.0 (a0890c3) adds schema-directed normalization for exact/equivalent
+declared client tools, including encoded todos. The derived list_dir-to-shell
+strategy still has its own vendor-option allowlist, which never included
+ignore_globs and has no client list_dir schema to decode that field against.
+The old diagnostic prints every input key/type whenever any key is unsupported;
+depth:string and target_directory:string are therefore misleading bystanders.
+The missing optional operation semantics and coverage, rather than a rollback
+of string-depth or todo normalization, are the root cause.
+
+## Changes and limits
+
+The derived strategy now decodes ignore_globs through an explicit array-of-strings
+schema. Both arrays and JSON-encoded arrays work; absent/empty rules preserve
+the existing ls/bounded-find commands. Nonempty rules become shell-quoted ERE
+predicates in BSD/GNU find and prune matching entries/subtrees within the depth
+bound. Single-segment wildcards do not cross separators; globstar, root anchors,
+directory-only rules, basic character classes and escaped literals are covered.
+This is an exclusion-glob list, not a gitignore parser: negation, brace expansion,
+extglobs and POSIX named character classes remain explicit unsupported syntax.
+Unknown option diagnostics now list only the actual unknown fields.
+
+Only a declared compatible bash/Bash/exec_command is emitted. Client permissions
+and execution remain authoritative. Streaming argument fragments are assembled
+before conversion. The original native ID/name/input, including the encoded
+ignore_globs string, are retained for toolUseResults and native task continuation.
+
+## Verification
+
+- 164 package tests passed, 0 failed/skipped, with installed Magpie 0.1.2862's
+  explicit production host host-c45194121abc.js and Bun 1.4.4. Host tests exercise
+  filtered directory execution and native result correlation in both streaming
+  and non-streaming modes; unit fixtures cover empty/nonempty encodings, depth,
+  glob semantics, schema selection, invalid inputs and shell/regex metacharacters.
+- Real shell fixtures pass on macOS BSD find. Six additional isolated Linux
+  GNU-find cases pass in the existing python:3.12-slim Docker image with network
+  disabled, including path anchoring, globstar, depth, character classes and
+  literal regex/shell punctuation in the root path.
+- A live Comate DeepSeek-v4.1-Flash probe emits native list_dir and fragmented
+  string-valued depth/path/ignore_globs arguments. The actual client shell lists
+  keep.txt and src/visible.txt while excluding .git/node_modules and their private
+  sentinel files. Native continuation returns DIRECTORY_IGNORE_LIVE_OK.
+- The local path installation was rebuilt as 0.5.4 and reloaded through Magpie's
+  plugin add command. The real installed Harness headless runner then completed
+  the entire Harness → local Magpie gateway → live Comate chain using a per-run
+  model overlay and a five-minute model-restricted gateway key. Session
+  session-7dcbbc7b-7726-46e5-b4c1-ad719086e2e5 contains completed client bash call
+  call_61226c20fc8f4f7685c00e64, the actual filtered listing, final text
+  HARNESS_DIRECTORY_IGNORE_OK and turn_end completed; process exit 0.
+  Scratch directories were removed and existing client model settings were not
+  changed. No credentials, local session logs or diagnostic scripts are shipped.
+
+---
+
 # 0.5.3 Context-usage estimates — 2026-11-03
 
 Cause: the Comate execute SSE observed in an independent GLM-4.7 cloud probe

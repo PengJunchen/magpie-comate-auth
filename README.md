@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.3`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.4`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.3.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.4.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.3.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.3.tgz
+├── magpie-comate-auth-0.5.4.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.4.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -116,6 +116,12 @@ Windows/Linux 的路径有单元测试，但尚未完成本版本原机验收。
 Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼容的 `bash`/`Bash`，
 插件会将其转换为该客户端工具的 `ls -la -- '<目录>'` 调用，并补齐声明的 description。
 目录作为完整 shell 字符串转义；原生 `depth` 支持 1–64 的整数或整数字符串，深度大于 1 时转换成有深度边界的 `find`。
+从 `0.5.4` 开始，原生 `ignore_globs` 支持字符串数组及其 JSON 编码字符串（例如 `"[]"`、`"[\"**/node_modules/**\",\".git\"]"`）。
+空数组保持原有目录命令；非空规则转换为 BSD/GNU `find` 的匹配与剪枝，排除匹配条目及被忽略目录的子树，并保留深度限制。
+支持 `*`、`?`、完整路径段 `**`、基础字符类和反斜线转义；单个 `*` 不跨越目录分隔符。
+无分隔符规则匹配任意层级的名称，含分隔符的规则相对列举目录；前导 `/` 或 `./` 锚定该目录，尾随 `/` 只匹配目录。
+不支持 gitignore 否定规则、花括号展开、extglob 或 POSIX 命名字符类；这些规则及非法 JSON 会明确报错，不会静默取消过滤。
+0.5.0 的 JSON 参数规范化没有覆盖这条派生目录操作的 `ignore_globs`，因此旧版遇到该可选字段仍会失败；这不是深度字符串修复被撤回。
 不附加提权/审批绕过参数；仍由客户端的审批和沙箱控制执行。
 工具结果回传时保留云端原始 `list_dir` 名称、ID 和参数。
 同样，原生 `run_command` 转为客户端已声明的 `bash`/`Bash`，保留命令本身，并按客户端 schema 映射工作目录、超时和后台执行选项。
