@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.5`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.6`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.5.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.6.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.5.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.5.tgz
+├── magpie-comate-auth-0.5.6.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.6.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -162,7 +162,14 @@ Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼�
 从 `0.5.5` 开始，遇到未声明且没有可用等价适配的原生函数名（例如 `delete_file`，或客户端只提供 `find` 时的 `glob_path`），
 插件在完整云端回合结束、且没有其它合法待执行调用时，将这次真实的边界校验失败以 `success:false` 回传原云端 task，附上当前可用函数名称，只允许一次纠正。
 不会添加删除能力、自动生成删除命令或伪造执行成功；模型重新选择的函数仍须通过相同的客户端 schema、tool_choice 和执行审批。
-重复非法调用、混合合法与非法调用、未完成流、参数错误和网络错误仍明确失败；不会重放用户输入、已执行工具结果或图片上传。
+从 `0.5.6` 开始，已声明工具的参数契约失败也可通过同一个一次上限回传纠正，包括额外字段、缺少必需字段、类型/枚举错误和无法保留的参数语义。
+明确等价的路径别名按目标 schema 转换：`ls/find` 的 `target_directory/directory/path`、文件工具的 `target_file/target_path/file_path/path`；
+`find` 的深度别名、`grep` 的 `include/glob` 和 shell 的 `command/cmd` 等也以客户端实际声明字段为准。冲突别名或多个可能目标不猜测选择。
+不会将 `glob_path` 的递归 glob 直接等同于 `find` 的名称模式，不会为缺少 cwd 字段的 shell 自动拼接 `cd`，也不会删除未知参数来强行通过校验。
+错误信息保留原函数名和失败字段，不包含失败参数值。参数纠正后仍必须重新通过原 schema；函数名错误和参数错误不会各获一次额外重试。
+客户端原始工具说明、完整参数 schema，以及由已声明能力推导的受支持原生别名，同时明确写入模型可见提示；不再仅列名称或笼统禁止所有原生名称。
+函数按名称排序，JSON 对象键和别名列表按固定顺序渲染，去除内部随机别名包装；同一契约不引入时间戳或随机值。原生 `TOOL` 服务端执行事件仍拒绝。
+重复非法调用、混合合法与非法调用、未完成流和网络错误仍明确失败；不会重放用户输入、已执行工具结果或图片上传。
 流中顶层 `error` 表示失败，即使 HTTP 为 200 且最后有 `[DONE]`；调用方应先识别该错误，不能仅凭 `[DONE]` 判断成功。
 流式与非流式使用同一适配器，回传云端时保留原始工具名、参数及调用 ID，客户端参数转换不污染原始记录。
 搜索支持 `content`、`files_with_matches`、`count`。优先使用能完整表达请求的客户端搜索工具；

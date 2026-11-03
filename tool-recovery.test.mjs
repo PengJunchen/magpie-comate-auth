@@ -70,7 +70,7 @@ for(const stream of [false,true])for(const isError of [false,true])test(`unknown
   const [initial,corrected]=f.executions()
   assert.deepEqual(corrected.toolUseResults,[{id:'rejected-native',name:'delete_file',params:nativeInput,success:false,message:corrected.toolUseResults[0].message}])
   assert.match(corrected.toolUseResults[0].message,/Validation rejected this call before execution; no client tool ran/)
-  assert.match(corrected.toolUseResults[0].message,/Available client function names: \["read","bash"\]/)
+  assert.match(corrected.toolUseResults[0].message,/Available client function names: \["bash","read"\]/)
   assert.equal(corrected.query,'');assert.deepEqual(corrected.contexts,[]);assert.equal(corrected.isFirstQuery,false);assert.equal(corrected.isUserQuery,false)
   assert.equal(corrected.conversationId,initial.conversationId);assert.equal(corrected.taskId,initial.taskId);assert.deepEqual(corrected.tools,initial.tools)
   assert.deepEqual(corrected.tools.map(tool=>tool.function.name),['read','bash'])
@@ -105,12 +105,19 @@ for(const [label,events,extra] of [
   ['none',[call('delete_file'),done],{tool_choice:'none'}],
   ['no tools',[call('delete_file'),done],{tools:[]}],
   ['mixed valid and invalid',[call('read',{path:'scratch/keep.txt'},'valid'),call('delete_file'),done],{}],
-  ['malformed offered arguments',[call('read',{},'invalid-arguments'),done],{}],
   ['incomplete cloud turn',[call('delete_file')],{}],
   ['native server execution',[{content:{type:'TOOL',detail:{}}}],{}],
   ['parallel violation',[call('delete_file',nativeInput,'a'),call('unknown_tool',{},'b'),done],{parallel_tool_calls:false}],
 ])test(`${label} remains an explicit error without a correction or client execution`,async()=>{
   const f=await fixture([()=>events]);await failure(await f.request(undefined,{stream:true,...extra}),true,/error/);assert.equal(f.executions().length,1)
+})
+
+test('malformed offered arguments remain a named contract failure after one bounded correction',async()=>{
+  const invalid=()=>[call('read',{},'invalid-arguments'),done]
+  const f=await fixture([invalid,invalid])
+  await failure(await f.request(undefined,{stream:true}),true,/Comate tool.*read.*rejected arguments/)
+  assert.equal(f.executions().length,2)
+  assert.equal(f.executions()[1].toolUseResults[0].success,false)
 })
 
 test('named tool selection remains enforced after correction',async()=>{

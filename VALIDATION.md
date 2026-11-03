@@ -1,3 +1,88 @@
+# 0.5.6 Explicit client contracts and bounded argument correction — 2026-11-04
+
+## Reported failure and evidence limits
+
+The supplied failure is Tool arguments $.target_directory: undeclared field.
+The previous diagnostic does not retain the native function name, so the
+original call cannot be uniquely reconstructed from that event. No private
+evaluation messages or task data are used to infer a particular function.
+
+The same failure is reproducible with an exactly declared, optional-path tool
+whose schema permits path but not target_directory. Prior ls/find had no
+directory-field profile, and exact shell tools did not enter the run_command
+field strategy. Those direct-name paths could reject valid directory/command
+aliases before client execution. Version 0.5.5's single corrective turn only
+handled unavailable names, not schema/parameter projection failures.
+
+An installed read smoke also exposed a prompt-level contract gap: the model
+reported that it could see the name read but no parameter schema, and that the
+blanket built-in prohibition left no native read_file request path. The code
+rendered names only; sending schemas in the API tools field did not establish
+that this model saw them. This evidence does not establish server internals,
+but it is sufficient to stop relying solely on that field. An earlier auto
+probe's lack of a tool call is therefore not treated as merely randomness.
+
+## Changes
+
+- Explicit model-visible client contracts include original tool descriptions,
+  exact parameter schemas and only known native adapter aliases for currently
+  offered capabilities. none, required and named selections remain consistent.
+  Read-only clients do not acquire shell aliases; delete_file is not added.
+  Native function requests still await client validation/execution, while
+  provider-side TOOL execution remains forbidden.
+- Functions, JSON object keys and alias targets use deterministic order.
+  Equivalent input key/tool order and regenerated internal protocol aliases
+  produce the same rendered contract. Tool-description constraints are retained
+  without the alias boilerplate. No timestamp or random request value enters
+  this rendered contract; this is not a claim about measured cache hits.
+- Proven field aliases project to fields the selected client schema actually
+  declares: ls/find directory paths, read/write/edit file paths, find depth,
+  grep include/glob and shell command/cmd/cwd/timeouts. Equivalent duplicate
+  aliases are compared after decoding; conflicting aliases or multiple possible
+  destinations fail. Shell mapping prefers the originally requested declared
+  shell when compatible. Content grep preserves its declared glob/include key.
+- Schema validation and known adapter projection errors become named
+  ToolContractError failures. Along with unavailable names, these share the
+  existing one-correction budget; they are sent as actual success:false
+  validation results, never silently accepted. Errors preserve the function
+  identity and failed contract field without embedding rejected values.
+
+Unknown fields are not removed. additionalProperties:false, required/type/enum
+checks and tool_choice remain effective on every corrected call. No implicit
+cd command supplies an undeclared cwd field, recursive glob_path semantics are
+not guessed as find basename matching, and no approval/deletion capability is
+introduced. Mixed valid/invalid batches still fail before exposing any pending
+client call. Repetition, network/protocol failure, cancellation and native-state
+cleanup retain their previous boundaries.
+
+## Verification
+
+252 package tests pass, 0 fail/skip, with explicit installed production Magpie
+host host-c45194121abc.js and Bun 1.4.4. New handwritten strict contracts use
+the public product interface field sets for read, ls, find, grep, bash, write
+and edit; product source was consulted read-only, with no client changes.
+They are synthetic fixtures, not copies of private evaluation requests.
+
+Coverage includes all seven tools' alias and additional-field matrices,
+streaming/JSON native-to-client result round trips, actual failed client result
+preservation, missing/invalid/enum/ambiguous inputs, shared name/argument retry
+budget, and atomic mixed-batch rejection. Production-host fixtures reproduce
+the exact optional target_directory schema error with a synthetic custom_read,
+then execute an actual parent/client read after correction in both response
+modes. The original strict schema and file remain intact. Prior directory,
+search, native session, usage, error and cancellation regressions still pass.
+
+The preliminary installed smoke first declined to call read while its schema
+was not explicit in the prompt. After explicit contract rendering, a real
+DeepSeek-v4.1-Flash gateway read and actual-result continuation both succeeded,
+with only choices/usage events, one usage chunk and DONE per response. Final
+installed artifact identity and the bounded gateway acceptance are recorded in
+the private installation receipt, separate from source-controlled test data.
+No paid evaluation task, private prompt, reasoning, patch or answer is included
+or rerun as part of this fix.
+
+---
+
 # 0.5.5 Bounded unoffered-function correction — 2026-11-04
 
 ## Cause

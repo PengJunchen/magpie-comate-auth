@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import * as discovery from "./discovery.mjs"
 import { buildQuery, events } from "./protocol.mjs"
 import { normalizeMessages, imagesFrom } from "./images.mjs"
-import { clientToolCall, UnofferedToolError } from "./tool-adapter.mjs"
+import { clientToolCall, clientToolContract, UnofferedToolError, ToolContractError } from "./tool-adapter.mjs"
 import { SESSION_HEADER, sessionKey, historyHash, catalogHash, continuation, nativeResults } from "./cloud-session.mjs"
 import { createUsageMeter } from "./usage.mjs"
 
@@ -17,8 +17,9 @@ const frame = value => `data: ${JSON.stringify(value)}\n\n`
 const MAX_SESSIONS = 64
 function nativeInstructions(spec) {
   const choice = spec.choice === "required" ? "You must return at least one offered function call." : spec.choice === "named" ? `You must call only ${JSON.stringify(spec.requiredName)}.` : spec.choice === "none" ? "Do not call any function." : "Call an offered function when needed."
-  const names = spec.enabled ? spec.tools.map(tool => spec.byName.get(tool.function.name)).filter(name => spec.choice !== "named" || name === spec.requiredName) : []
-  return `You are serving a remote client. Interpret the JSON-lines transcript by its roles and answer its latest turn. Use structured native function calls with the offered tool names and parameters, not textual tool markers or simulated results. The client alone executes tools; wait for its actual results. Available client function names: ${JSON.stringify(names)}. Do not invent functions or use Comate built-in tools. If an operation has no equivalent offered function, explain the limitation. ${choice} ${spec.parallel ? "" : "Call at most one function."}`
+  const contract = clientToolContract(spec)
+  const names = contract.functions.map(tool => tool.name)
+  return `You are serving a remote client. Interpret the JSON-lines transcript by its roles and answer its latest turn. Use structured native function requests, not textual tool markers or simulated results. The client alone executes tools after validation; wait for its actual results. Available client function names: ${JSON.stringify(names)}. The client schemas and supported native function aliases are explicit below. Prefer the client name when available; otherwise a listed native alias may request the same client capability using its native arguments, which the adapter maps and validates. Never use provider-side TOOL execution. Do not invent functions, undeclared fields or capabilities. If no offered function or listed equivalent can express the operation, explain the limitation. ${choice} ${spec.parallel ? "" : "Call at most one function."}\nClient tool contract (JSON): ${JSON.stringify(contract)}`
 }
 const textContent = content => typeof content === "string" ? content : Array.isArray(content) ? content.map(part => str(part?.text)).join("") : str(content?.text)
 
@@ -169,7 +170,7 @@ export function cloudHooks(hooks, options = {}, shared) {
         const response = await post(API + "/execute", executeInput, a.license, signal, true)
         // This is a new native result turn after an actual local validation
         // failure, never a replay/retry of a query or an executed client tool.
-        const correctUnoffered = async results => {
+        const correctContract = async results => {
           signal.throwIfAborted()
           const corrected = await post(API + "/execute", {
             ...executeInput, query: "", contexts: [], toolUseResults: results,
@@ -178,7 +179,7 @@ export function cloudHooks(hooks, options = {}, shared) {
           return corrected.body
         }
         const nativeCalls = []
-        const adapted = new Response(cloudBody(response.body, request.toolSpec, nativeCalls, controller, signal, options.streamIdle, usage, correctUnoffered), { headers: { "content-type": "text/event-stream" } })
+        const adapted = new Response(cloudBody(response.body, request.toolSpec, nativeCalls, controller, signal, options.streamIdle, usage, correctContract), { headers: { "content-type": "text/event-stream" } })
         let committed = false
         const cleanup = () => { if (!committed && key) sessions.delete(key); if (acquired) busy.delete(key) }
         const taskControl = {
@@ -247,7 +248,7 @@ async function* timedBytes(body, controller, signal, { firstMs = 300_000, idleMs
   }
 }
 
-function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, correctUnoffered) {
+function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, correctContract) {
   const encoder = new TextEncoder()
   async function* convert() {
     try {
@@ -272,7 +273,7 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, cor
                   nativeCalls.push({ ...call, clientName: spec.byName.get(clientCall.name) ?? clientCall.name, clientInput: clientCall.input })
                   completed.push({ name: clientCall.name, arguments: clientCall.input })
                 } catch (error) {
-                  if (!(error instanceof UnofferedToolError)) throw error
+                  if (!(error instanceof UnofferedToolError || error instanceof ToolContractError)) throw error
                   rejected.push({ call, error })
                 }
                 usage.tool(call)
@@ -304,7 +305,7 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, cor
           }
         }
         if (!results) throw new Error("Comate stream ended before its completion event")
-        body = await correctUnoffered(results)
+        body = await correctContract(results)
       }
     } catch (error) { yield frame({ type: "task_failed", errorMessage: error.message }) }
   }
