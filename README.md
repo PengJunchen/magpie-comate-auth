@@ -1,25 +1,109 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.1`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.2`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
 
-## 本机使用
+## 在 Magpie 中安装和使用
+
+本插件是跨平台 JavaScript，不需要编译 Magpie，也不需要把文件复制进 `Magpie.app` 或 Magpie 的程序安装目录。
+三种安装方式任选一种，推荐直接从 GitHub 安装。
+
+### 方式一：直接安装公开插件（推荐）
+
+在 Magpie → **插件 → 非官方** 中搜索 `magpie-comate-auth`，选择 `PengJunchen/magpie-comate-auth` 并安装。
+GitHub 索引及 Magpie 的十分钟缓存可能延迟显示；找不到时可以在终端运行：
 
 ```sh
 magpie plugin add github:PengJunchen/magpie-comate-auth
 magpie plugin login comate 1
 ```
 
-选择 `Comate account (this computer)`，然后在 Magpie 中选择实时目录中的 `comate/<model ID>`。
-也可在 Magpie → 插件 → 非官方 中查找此仓库并安装。GitHub 搜索索引及 Magpie 的十分钟缓存可能延迟显示。
-插件升级后使用新会话测试，必要时重启 Magpie。
-不需要 Comate 本地服务运行，但需可读的有效登录凭据和到 `https://comate.baidu.com` 的网络。
-也支持手工输入 license。宿主会保存凭据；对话、系统提示、工具定义、图片、客户端返回的工具结果会发往 Comate 云端。
-插件只读 Comate 设置，不修改该文件。macOS 默认位置为
-`~/Library/Application Support/Comate/User/settings.json`；可用绝对路径 `COMATE_SETTINGS_PATH` 覆盖，支持 JSONC。
-Windows/Linux 路径仍有单元测试，未做本版本原机验收。
+这种方式由 Magpie 下载、管理文件，不需要自己选择存放目录。
+已安装后，可在 Magpie 插件页面对本插件执行更新。
+
+### 方式二：下载构建产物，用本地文件夹安装
+
+从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
+`magpie-comate-auth-0.5.2.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
+
+```text
+~/MagpiePlugins/
+└── magpie-comate-auth/     ← Magpie 要添加的文件夹
+    ├── package.json
+    ├── index.mjs          ← 插件入口，无需单独点击运行
+    ├── cloud.mjs
+    ├── tool-adapter.mjs
+    └── …                 ← 其他运行模块必须保留
+```
+
+从上述父目录执行，**相对路径就是 `./magpie-comate-auth`**：
+
+```sh
+cd ~/MagpiePlugins
+magpie plugin add ./magpie-comate-auth
+magpie plugin login comate 1
+```
+
+也可在 Magpie 的插件添加入口选择解压后的 `magpie-comate-auth` 文件夹。
+应选中**同时包含 `package.json` 和 `index.mjs` 的这一层**，不要选 ZIP、单个 `index.mjs` 或外层父目录。
+本地安装登记的是文件夹路径，不会替你保管原文件；安装后不要移动或删除该文件夹。
+ZIP 是运行文件归档，没有安装脚本。`.tgz` 是相同运行文件的 npm 格式包，普通用户使用 ZIP 即可。
+Release 同时提供 `SHA256SUMS` 和 `BUILD-INFO.json` 用于校验和追溯，后者记录源码提交、未提交变更标记和各运行文件哈希。
+
+### 方式三：从源码构建后安装
+
+克隆仓库并在**仓库根目录**执行（需要 Node.js 22+、npm；没有第三方依赖）：
+
+```sh
+git clone https://github.com/PengJunchen/magpie-comate-auth.git
+cd magpie-comate-auth
+npm run build
+magpie plugin add ./dist/magpie-comate-auth
+magpie plugin login comate 1
+```
+
+**相对于仓库根目录，安装目录是 `./dist/magpie-comate-auth`。** 构建产物如下：
+
+```text
+dist/
+├── magpie-comate-auth/                  ← 本地安装时添加这一层
+│   ├── package.json
+│   ├── index.mjs
+│   └── …
+├── magpie-comate-auth-0.5.2.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.2.tgz
+├── BUILD-INFO.json
+└── SHA256SUMS
+```
+
+下载 ZIP 的用户不需要运行 `npm install` 或 `npm run build`；构建命令仅用于完整源码仓库。
+`dist/` 由命令生成，不提交进 Git；可下载产物发布在 Releases。
+
+### 登录、选模型与确认安装
+
+在提供方页面添加 **Comate**，选择 **Comate account (this computer)**。
+电脑需已有可读的 Comate 登录凭据；不需要 Comate 本地服务保持运行。
+登录后把需要使用的客户端模型切换为实时目录中的 `comate/<model ID>`。
+仅添加插件不会自动改变 DeepSeek Harness、Codex 或 Claude Code 的模型选择。
+
+```sh
+magpie plugin list
+```
+
+列表应显示 `comate`、已登录状态和模型数量；未登录时先在 Comate 中登录，再运行上面的插件登录命令。
+如果同一提供方装了多份插件，可明确指定由哪份提供服务，例如：
+
+```sh
+magpie plugin use github:PengJunchen/magpie-comate-auth comate
+```
+
+也支持手工输入 license。宿主会保存凭据；对话、系统提示、工具定义、图片和客户端工具结果会发往
+`https://comate.baidu.com`。插件只读 Comate 设置，不修改该文件；macOS 默认位置为
+`~/Library/Application Support/Comate/User/settings.json`，可用绝对路径 `COMATE_SETTINGS_PATH` 覆盖。
+Windows/Linux 的路径有单元测试，但尚未完成本版本原机验收。
 
 ## 工具和续聊
 

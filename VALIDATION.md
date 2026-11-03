@@ -1,3 +1,28 @@
+# 0.5.2 Build artifacts and installation guide — 2026-11-03
+
+This update changes packaging and documentation only. Runtime modules are unchanged from
+0.5.1; the historical 141-test runtime evidence below is not relabeled as a new test run.
+
+npm run build assembles dist/magpie-comate-auth, a deterministic stored ZIP, an npm TGZ,
+SHA256SUMS and BUILD-INFO.json. The manifest includes the commit, dirty-worktree flag and
+all 13 payload file hashes. The build uses Node and npm only, with an isolated temporary
+npm cache and no package lifecycle scripts. No executable installer or Magpie binary is bundled.
+
+Independent Python zipfile CRC validation and tarfile inspection confirmed the exact 13-file
+allowlist and byte equality with both the source and assembled directory; all external SHA-256
+checksums matched. The built index.mjs imported successfully and returned the Comate hooks.
+The actual installed Magpie CLI accepted ./dist/magpie-comate-auth from the repository root,
+registered provider comate and resolved the intended folder. That smoke used a temporary
+XDG_CONFIG_HOME, without signing in or altering the user's active provider.
+
+README now distinguishes GitHub installation, Release ZIP extraction and local source builds.
+It identifies the package.json/index.mjs directory, documents a stable ~/MagpiePlugins example
+and both relative paths, explains that path installations keep referencing their folder, and
+separates plugin installation from selecting the model for a client. Downloaded runtime ZIPs
+need no npm install/build. Release assets, not generated dist files, are the downloadable products.
+
+---
+
 # 0.5.1 Search output-mode semantics — 2026-11-03
 
 Cause: field-only grep translation rejected output_mode when the caller offered a fixed
