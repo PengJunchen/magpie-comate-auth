@@ -113,6 +113,8 @@ for(const stream of [false,true])test(`native todo array corrects to one client 
   assert.equal(f.executions[1].toolUseResults[0].success,false)
   assert.equal(f.executions[1].toolUseResults[0].id,'native-batch')
   assert.deepEqual(f.executions[0].tools,f.executions[1].tools)
+  const contract=JSON.parse(f.executions[0].systemReminder.split('Client tool contract (JSON): ')[1])
+  assert.deepEqual(contract.native_aliases,{})
   f.messages.push(first,{role:'tool',tool_call_id:client.id,content:'ACTUAL_CLIENT_RESULT'})
   await readMessage(await f.request(stream),stream)
   assert.equal(f.executions[2].isFirstQuery,true)

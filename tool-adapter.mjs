@@ -40,7 +40,8 @@ export function clientToolContract(spec) {
   const names = new Set(available.map(tool => tool.name))
   const aliases = new Map()
   for (const profile of RENAMED_TOOLS) {
-    const targets = profile.client.filter(name => names.has(name))
+    const targets = profile.client.filter(name => available.some(tool =>
+      tool.name === name && (!profile.items || !tool.schema.required?.includes("action"))))
     if (!targets.length) continue
     for (const name of profile.native) {
       if (allNames.has(name) && !names.has(name)) continue
