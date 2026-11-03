@@ -1,0 +1,41 @@
+{
+  "name": "@pengjunchen/magpie-comate-auth",
+  "version": "0.4.1",
+  "description": "Baidu Comate cloud provider with images, native session continuation and client-owned tools",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": "./index.mjs",
+  "files": [
+    "index.mjs",
+    "cloud.mjs",
+    "images.mjs",
+    "cloud-session.mjs",
+    "tool-adapter.mjs",
+    "protocol.mjs",
+    "discovery.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "test:integration": "node --test cloud-host.test.mjs"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "magpie",
+    "comate",
+    "baidu",
+    "文心快码",
+    "magpie-plugin"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PengJunchen/magpie-comate-auth.git"
+  },
+  "author": "PengJunchen",
+  "homepage": "https://github.com/PengJunchen/magpie-comate-auth#readme",
+  "bugs": {
+    "url": "https://github.com/PengJunchen/magpie-comate-auth/issues"
+  }
+}
