@@ -1,3 +1,22 @@
+# 0.5.4 Web search argument adaptation — 2026-11-06
+
+The affected Harness session declared web_search with required queries:string[].
+An independent live Comate DeepSeek-v4.1-Flash probe reproduced HTTP 502 with
+the reported missing $.queries error. Native events contained a fragmented
+query string and max_results:"5". The adapter now converts that query to a
+single-element queries array, preserves batches and declared result-count
+controls, and uses the client's default count when its schema offers no control.
+Unsupported filters, empty/missing/conflicting queries and invalid counts fail.
+Original native parameters and IDs survive tool-result continuation.
+
+152 tests passed with the explicit production Magpie host/Bun, no failures or
+skips. New regressions cover Harness, single-query WebSearch, offered aliases,
+JSON-encoded batches, invalid requests and streamed/non-streamed native result
+correlation. A fresh real-cloud probe returned HTTP 200 and a valid queries
+array for the exact Harness schema. This probe validates model/adapter output.
+
+---
+
 # 0.5.3 Context-usage estimates — 2026-11-03
 
 Cause: the Comate execute SSE observed in an independent GLM-4.7 cloud probe

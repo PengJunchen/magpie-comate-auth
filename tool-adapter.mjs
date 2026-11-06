@@ -7,7 +7,46 @@ import { SHELL_TOOLS, RENAMED_TOOLS } from "./tool-profiles.mjs"
 import { isSearchCall, searchCall } from "./tool-search.mjs"
 
 const declared = spec => spec.tools.map(tool => ({ name: spec.byName.get(tool.function.name), schema: tool.function.parameters ?? {} }))
-const finish = (target, input) => ({ name: target.name, input: normalizeArguments(input, target.schema) })
+const WEB_SEARCH_NAMES = ["web_search", "websearch", "WebSearch"]
+const finish = (target, input) => ({ name: target.name, input: normalizeArguments(WEB_SEARCH_NAMES.includes(target.name) ? webSearchArguments(input, target) : input, target.schema) })
+
+function webSearchArguments(input, target) {
+  const properties = target.schema.properties
+  if (!properties) return input
+  const queryKey = ["queries", "query", "search_query"].find(key => Object.hasOwn(properties, key))
+  if (!queryKey) return input
+  const output = {}, queries = []
+  for (const [key, value] of Object.entries(input)) {
+    if (["queries", "query", "search_query"].includes(key)) {
+      const list = key === "queries" ? normalizeArguments(value, { type: "array", items: { type: "string" }, minItems: 1 }) : [normalizeArguments(value, { type: "string" })]
+      if (list.some(query => !query.trim())) throw new Error("Web search requires nonempty queries")
+      if (queries.length && JSON.stringify(queries) !== JSON.stringify(list)) throw new Error("Ambiguous web search queries")
+      queries.splice(0, queries.length, ...list)
+    } else if (["max_results", "maxResults"].includes(key)) {
+      const count = normalizeArguments(value, { type: "integer", minimum: 1 })
+      const countKey = [key, "max_results", "maxResults"].find(name => Object.hasOwn(properties, name))
+      // Some clients choose their own search result count. This vendor hint
+      // uses that client default when the tool exposes no count control.
+      if (countKey) {
+        if (Object.hasOwn(output, countKey) && output[countKey] !== count) throw new Error("Ambiguous web search result count")
+        output[countKey] = count
+      }
+    } else if (key === "explanation" && !Object.hasOwn(properties, key)) {
+      continue
+    } else {
+      if (!Object.hasOwn(properties, key)) throw new Error(`Cannot preserve ${key} in the declared ${target.name} tool`)
+      output[key] = value
+    }
+  }
+  if (queries.length) {
+    if (properties[queryKey].type === "array") output[queryKey] = queries
+    else {
+      if (queries.length !== 1) throw new Error("The declared web search tool accepts only one query")
+      output[queryKey] = queries[0]
+    }
+  }
+  return output
+}
 
 function renameFields(input, profile, target) {
   const properties = target.schema.properties ?? {}
@@ -54,6 +93,11 @@ export function clientToolCall(call, spec) {
 }
 
 const STRATEGIES = [
+  { matches: call => WEB_SEARCH_NAMES.includes(call.name), adapt(call, spec) {
+    const target = declared(spec).find(tool => WEB_SEARCH_NAMES.includes(tool.name))
+    if (!target) throw new Error("The client offers no compatible web search tool")
+    return finish(target, call.input)
+  } },
   { matches: isSearchCall, adapt: searchCall },
   { matches: call => call.name === "run_command", adapt: commandCall },
   { matches: call => call.name === "list_dir", adapt: directoryCall },

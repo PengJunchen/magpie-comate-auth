@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.3`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.4`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.3.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.4.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.3.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.3.tgz
+├── magpie-comate-auth-0.5.4.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.4.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -134,6 +134,12 @@ Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼�
 目录仅来自当前账号的云端实时列表，图片能力按该列表的 `supportImage` 字段展示；没有固定模型种子。
 
 ### 通用工具适配
+
+`0.5.4` 增加网络搜索参数适配。Comate 的 `web_search({query: "...", max_results: "5"})`
+可转换为 Harness 声明的 `web_search({queries: ["..."]})`，也支持 `WebSearch` / `websearch`。
+客户端有结果条数参数时保留并校验该值，否则使用客户端默认结果数量。
+多条查询不会合并成一条，空查询、冲突查询和无法表达的域名等筛选条件会报错。
+原生工具结果回传保留 Comate 的原始 ID、查询参数及结果条数提示。
 
 插件按本次请求的工具目录工作，不依赖应用名称或固定的全局工具表。
 `tool-adapter.mjs` 负责有序策略选择与结果关联；`tool-profiles.mjs` 声明等价能力及字段映射；
