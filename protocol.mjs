@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { normalizeArguments } from "./tool-schema.mjs"
 
 export const MAX_TOOL_CALLS = 64
 export const MAX_TOOL_TEXT_CHARS = 256 * 1024
@@ -150,7 +151,7 @@ function transcriptMessage(raw) {
   return message
 }
 
-function toolInstructions(spec) {
+export function toolInstructions(spec) {
   if (!spec.enabled) {
     if (!spec.tools.length) return ""
     return `\n\nThe request declares these tools, but tool_choice is none. Do not call or simulate any tool. Earlier tool-call names in the transcript are historical client names, not Comate tools.\n${JSON.stringify(spec.tools)}`
@@ -217,6 +218,12 @@ function validateCalls(value, spec) {
     }
     if (!args || typeof args !== "object" || Array.isArray(args)) {
       return { invalid: `arguments for ${name} must be a JSON object` }
+    }
+    const target = spec.tools.find(tool => spec.byName.get(tool.function.name) === originalName)
+    try {
+      args = normalizeArguments(args, target.function.parameters ?? {})
+    } catch (error) {
+      return { invalid: error.message }
     }
     calls.push({ name: originalName, arguments: JSON.stringify(args) })
   }

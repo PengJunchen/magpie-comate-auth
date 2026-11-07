@@ -84,11 +84,13 @@ for(const order of ['name-then-arguments','arguments-then-name'])test(`unknown n
   assert.equal(f.executions.length,2);assert.equal(raw.split('data: [DONE]').length-1,1)
 })
 
-test('mixed valid and argument-invalid calls fail atomically before any client call or correction',async()=>{
-  const f=await fixture([[call('read',{path:'scratch/file'},'valid'),call('ls',{all:'not JSON'},'invalid'),done]])
+test('mixed valid and argument-invalid calls get one atomic correction, then fail without client execution',async()=>{
+  const batch=[call('read',{path:'scratch/file'},'valid'),call('ls',{all:'not JSON'},'invalid'),done]
+  const f=await fixture([batch,batch])
   const raw=await (await f.request(true)).text()
   assert.match(raw,/"error"/);assert.ok(!raw.includes('"tool_calls"'))
-  assert.ok(!raw.includes('"usage":'));assert.equal(f.executions.length,1)
+  assert.ok(!raw.includes('"usage":'));assert.equal(f.executions.length,2)
+  assert.deepEqual(f.executions[1].toolUseResults.map(result=>[result.id,result.success]),[['valid',false],['invalid',false]])
 })
 
 const actionTodo = define('todo_write', {

@@ -104,12 +104,21 @@ for(const stream of [false,true])test(`native glob_path may be corrected to a de
 for(const [label,events,extra] of [
   ['none',[call('delete_file'),done],{tool_choice:'none'}],
   ['no tools',[call('delete_file'),done],{tools:[]}],
-  ['mixed valid and invalid',[call('read',{path:'scratch/keep.txt'},'valid'),call('delete_file'),done],{}],
   ['incomplete cloud turn',[call('delete_file')],{}],
   ['native server execution',[{content:{type:'TOOL',detail:{}}}],{}],
   ['parallel violation',[call('delete_file',nativeInput,'a'),call('unknown_tool',{},'b'),done],{parallel_tool_calls:false}],
 ])test(`${label} remains an explicit error without a correction or client execution`,async()=>{
   const f=await fixture([()=>events]);await failure(await f.request(undefined,{stream:true,...extra}),true,/error/);assert.equal(f.executions().length,1)
+})
+
+test('a repeated mixed batch fails after one correction without leaking the valid pending call',async()=>{
+  const batch=()=>[call('read',{path:'scratch/keep.txt'},'valid'),call('delete_file'),done]
+  const f=await fixture([batch,batch])
+  const response=await f.request(undefined,{stream:true}),raw=await response.text()
+  assert.match(raw,/client did not offer: delete_file/)
+  assert.ok(!raw.includes('"tool_calls"'))
+  assert.equal(f.executions().length,2)
+  assert.deepEqual(f.executions()[1].toolUseResults.map(result=>[result.id,result.success]),[['valid',false],['rejected-native',false]])
 })
 
 test('malformed offered arguments remain a named contract failure after one bounded correction',async()=>{

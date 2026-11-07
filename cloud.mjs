@@ -2,8 +2,7 @@
 // Only the calling client executes local tools. No desktop-service fallback.
 import { randomUUID } from "node:crypto"
 import * as discovery from "./discovery.mjs"
-import { buildQuery, events, MAX_TOOL_TEXT_CHARS, parseToolCalls } from "./protocol.mjs"
-import { normalizeArguments } from "./tool-schema.mjs"
+import { buildQuery, events, MAX_TOOL_TEXT_CHARS, parseToolCalls, toolInstructions } from "./protocol.mjs"
 import { normalizeMessages, imagesFrom } from "./images.mjs"
 import { clientToolCall, clientToolContract, UnofferedToolError, ToolContractError } from "./tool-adapter.mjs"
 import { SESSION_HEADER, sessionKey, historyHash, catalogHash, continuation, nativeResults } from "./cloud-session.mjs"
@@ -21,13 +20,6 @@ function actionTodoSchema(spec) {
   const tool = spec.tools.find(entry => spec.byName.get(entry.function.name) === "todo_write")
   const schema = tool?.function.parameters
   if (schema?.required?.includes("action") && !schema.properties?.todos && !schema.properties?.plan) return schema
-}
-
-function todoCorrection(spec, rejected) {
-  if (rejected.length !== 1) return
-  const { call } = rejected[0]
-  if (!["todo_write", "TodoWrite", "todowrite"].includes(call.name) || !Object.hasOwn(call.input, "todos")) return
-  return actionTodoSchema(spec)
 }
 
 function nativeInstructions(spec) {
@@ -272,9 +264,10 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, cor
   const encoder = new TextEncoder()
   async function* convert() {
     try {
-      let todoSchema, correctionFormat = ""
+      let correctionFormat = ""
       for (let correction = 0; ; correction++) {
-        const live = new Map(), completed = [], rejected = []
+        const live = new Map(), completed = [], rejected = [], batch = []
+        const nativeStart = nativeCalls.length
         let hasText = false, results, correctionText = ""
         for await (const event of events(timedBytes(body, controller, signal, idle))) {
           const content = event?.content
@@ -289,6 +282,8 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, cor
               for (const [key, value] of Object.entries(tool.input ?? {})) call.input[key] = content.type === "FUNCTION_CALL_PARAMS_APPEND" && typeof value === "string" ? (call.input[key] ?? "") + value : value
               live.set(tool.id, call)
               if (content.type === "FUNCTION_CALL_END") {
+                if (batch.some(previous => previous.id === call.id)) throw new Error("Cloud reused a tool call id")
+                batch.push(call)
                 try {
                   const clientCall = clientToolCall(call, spec)
                   nativeCalls.push({ ...call, clientName: spec.byName.get(clientCall.name) ?? clientCall.name, clientInput: clientCall.input })
@@ -308,36 +303,41 @@ function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, cor
             if (str(detail.delta)) {
               usage.text(detail.delta)
               hasText = true
-              if (todoSchema) {
+              if (correction) {
                 correctionText += detail.delta
-                if (correctionText.length > MAX_TOOL_TEXT_CHARS) throw new Error("Todo correction text is too large")
+                if (correctionText.length > MAX_TOOL_TEXT_CHARS) throw new Error("Correction text is too large")
               } else yield frame({ kind: "text-delta", delta: detail.delta })
             }
             if (detail.end === true) {
               if (live.size) throw new Error("Comate ended with incomplete tool arguments")
               if (rejected.length) {
-                // Never discard/replay a valid pending call, violate the caller's
-                // parallel limit, or keep correcting an uncooperative model.
-                if (correction || completed.length || !spec.parallel && rejected.length > 1) throw rejected[0].error
-                todoSchema = todoCorrection(spec, rejected)
-                correctionFormat = todoSchema
-                  ? `\nFor this correction only, use a textual tool block for any needed todo_write call, instead of the native function. Output exactly one client todo_write action in this format: ${spec.startTag}[{"name":"todo_write","arguments":{"action":"list"}}]${spec.endTag}. This is a format example. Choose the action and arguments that match the task, using the client schema. Never invent item IDs or report execution yourself.`
-                  : ""
-                results = rejected.map(({ call, error }) => ({
-                  id: call.id, name: call.name, params: call.input, success: false,
-                  message: `${error.message}. Validation rejected this call before execution; no client tool ran. ${nativeInstructions(spec)}${correctionFormat}`,
-                }))
+                if (correction || !spec.parallel && batch.length > 1) throw rejected[0].error
+                // No tool marker has reached the client. Reject the entire
+                // pending batch truthfully before asking for a corrected plan.
+                nativeCalls.length = nativeStart
+                correctionFormat = "\nFor this correction, use the following client text-call contract. A rejected internal tool is unavailable unless the client later offers it. Continue using the offered capabilities, or explain the limitation. Wait for actual client results."
+                  + toolInstructions(spec)
+                results = batch.map(call => {
+                  const failure = rejected.find(item => item.call.id === call.id)
+                  const reason = failure
+                    ? `${failure.error.message}. Validation rejected this call before execution; no client tool ran.`
+                    : "Batch withheld this call before execution because another call failed validation; no client tool ran."
+                  return {
+                    id: call.id, name: call.name, params: call.input, success: false,
+                    message: `${reason} ${nativeInstructions(spec)}${correctionFormat}`,
+                  }
+                })
                 break
               }
-              if (todoSchema && hasText) {
+              if (correction && hasText) {
                 const parsed = parseToolCalls(correctionText, spec)
-                if (parsed.invalid || parsed.calls.length && (completed.length || parsed.calls.length !== 1 || parsed.calls[0].name !== "todo_write")) {
-                  throw new Error("Invalid todo correction tool block")
+                if (parsed.invalid) throw new Error(`Invalid correction tool block: ${parsed.invalid}`)
+                const actionTodo = actionTodoSchema(spec) && parsed.calls.some(call => call.name === "todo_write")
+                if (parsed.calls.length && completed.length || actionTodo && parsed.calls.length !== 1) {
+                  throw new Error("Invalid correction tool block")
                 }
-                if (parsed.calls.length) {
-                  const input = normalizeArguments(JSON.parse(parsed.calls[0].arguments), todoSchema)
-                  completed.push({ name: "todo_write", arguments: input })
-                }
+                const validated = parsed.calls.map(call => ({name:call.name, arguments:JSON.parse(call.arguments)}))
+                completed.push(...validated)
                 const text = parsed.calls.length ? parsed.content : correctionText
                 if (text) yield frame({ kind: "text-delta", delta: text })
               }

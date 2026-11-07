@@ -8,12 +8,12 @@ import {join} from 'node:path'
 import {MagpieHost,findBun,findMagpieHost} from './host-process.mjs'
 
 const bun=findBun(),hostPath=findMagpieHost()
-for(const scenario of ['unoffered','arguments'])for(const stream of [false,true])test(`production host corrects ${scenario} contract rejection without widening client capability (stream=${stream})`,{skip:!bun||!hostPath?'Set MAGPIE_HOST and MAGPIE_BUN':false,timeout:30000},async t=>{
+for(const scenario of ['unoffered','arguments','text'])for(const stream of [false,true])test(`production host corrects ${scenario} contract rejection without widening client capability (stream=${stream})`,{skip:!bun||!hostPath?'Set MAGPIE_HOST and MAGPIE_BUN':false,timeout:30000},async t=>{
   const root=mkdtempSync(join(tmpdir(),'comate-recovery-host-'))
   t.after(()=>rmSync(root,{recursive:true,force:true}))
   const file=join(root,'keep.txt');writeFileSync(file,'ACTUAL_READ_RESULT')
   const clientName=scenario==='arguments'?'custom_read':'read'
-  const rejectedName=scenario==='arguments'?clientName:'delete_file'
+  const rejectedName=scenario==='arguments'?clientName:scenario==='text'?'todo_write':'delete_file'
   const rejectedInput=scenario==='arguments'?{path:file,target_directory:root}:{target_file:file}
   const acceptedName=scenario==='arguments'?clientName:'read_file'
   const acceptedInput=scenario==='arguments'?{path:file}:{target_file:file}
@@ -31,6 +31,10 @@ for(const scenario of ['unoffered','arguments'])for(const stream of [false,true]
       {content:{type:'FUNCTION_CALL_END',detail:{toolUse:[{id:index===1?'rejected':'accepted',input:{}}]}}},
       {content:{type:'ANSWER',detail:{end:true}}},
     ]
+    if(scenario==='text'&&index===2) {
+      const marker=body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:([\w-]+)\|>/)
+      events.splice(0,events.length,{content:{type:'ANSWER',detail:{delta:marker[0]+JSON.stringify([{name:clientName,arguments:{path:file}}])+'<|/MAGPIE_TOOL_CALLS:'+marker[1]+'|>',end:true}}})
+    }
     res.setHeader('content-type','text/event-stream');res.end(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''))
   })
   server.listen(0,'127.0.0.1');await once(server,'listening')
@@ -68,6 +72,11 @@ for(const scenario of ['unoffered','arguments'])for(const stream of [false,true]
   assert.equal(existsSync(file),true)
   messages.push(first,{role:'tool',tool_call_id:clientCall.id,content:result})
   assert.equal(JSON.parse(await request()).choices[0].message.content,result)
-  assert.deepEqual(payloads[2].toolUseResults,[{id:'accepted',name:acceptedName,params:acceptedInput,success:true,message:result}])
+  if(scenario==='text') {
+    assert.deepEqual(payloads[2].toolUseResults,[])
+    assert.equal(payloads[2].isFirstQuery,true)
+    assert.ok(payloads[2].query.includes(clientCall.id))
+    assert.ok(payloads[2].query.includes(result))
+  } else assert.deepEqual(payloads[2].toolUseResults,[{id:'accepted',name:acceptedName,params:acceptedInput,success:true,message:result}])
   assert.equal(payloads[2].taskId,payloads[0].taskId);assert.equal(existsSync(file),true)
 })
