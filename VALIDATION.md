@@ -1,3 +1,26 @@
+# 0.5.11 Consolidated main integration — 2026-11-08
+
+Repository audit found no pull requests in any state. Seven remote fix branches
+contained eight commits not reachable from main; main independently contained
+912109b (web-search argument compatibility). The integration merge retains both
+histories, all previous validation records and main's web-search regression tests.
+Conflicts in README, package version, validation history and tool adapter were
+resolved by preserving both capabilities rather than choosing one branch's files.
+
+Web-search semantic argument failures now use ToolArgumentError, so the existing
+bounded contract correction can handle them consistently. Two new synthetic
+stream/JSON regressions failed before that integration adjustment, then passed;
+they verify the actual result's original native ID and parameters after correction.
+
+Validation: 298 tests passed, 0 failed, 0 skipped using the explicitly selected
+production Magpie plugin host and Bun with synthetic loopback upstream fixtures.
+No real inference calls were made. The single-request three-execute bound and
+client tool/schema/choice/parallel validation remain in place. Release build
+validation uses a separate temporary clone and does not overwrite the installed
+plugin payload. There are no configured GitHub Actions workflows in this repo.
+
+---
+
 # 0.5.6 Explicit client contracts and bounded argument correction — 2026-11-04
 
 ## Reported failure and evidence limits
@@ -228,6 +251,25 @@ ignore_globs string, are retained for toolUseResults and native task continuatio
   HARNESS_DIRECTORY_IGNORE_OK and turn_end completed; process exit 0.
   Scratch directories were removed and existing client model settings were not
   changed. No credentials, local session logs or diagnostic scripts are shipped.
+
+---
+
+# 0.5.4 Web search argument adaptation — 2026-11-06
+
+The affected Harness session declared web_search with required queries:string[].
+An independent live Comate DeepSeek-v4.1-Flash probe reproduced HTTP 502 with
+the reported missing $.queries error. Native events contained a fragmented
+query string and max_results:"5". The adapter now converts that query to a
+single-element queries array, preserves batches and declared result-count
+controls, and uses the client's default count when its schema offers no control.
+Unsupported filters, empty/missing/conflicting queries and invalid counts fail.
+Original native parameters and IDs survive tool-result continuation.
+
+152 tests passed with the explicit production Magpie host/Bun, no failures or
+skips. New regressions cover Harness, single-query WebSearch, offered aliases,
+JSON-encoded batches, invalid requests and streamed/non-streamed native result
+correlation. A fresh real-cloud probe returned HTTP 200 and a valid queries
+array for the exact Harness schema. This probe validates model/adapter output.
 
 ---
 

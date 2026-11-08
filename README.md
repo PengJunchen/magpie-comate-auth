@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.10`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.11`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.10.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.11.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.10.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.10.tgz
+├── magpie-comate-auth-0.5.11.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.11.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -140,6 +140,12 @@ Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼�
 目录仅来自当前账号的云端实时列表，图片能力按该列表的 `supportImage` 字段展示；没有固定模型种子。
 
 ### 通用工具适配
+
+`0.5.4` 增加网络搜索参数适配。Comate 的 `web_search({query: "...", max_results: "5"})`
+可转换为 Harness 声明的 `web_search({queries: ["..."]})`，也支持 `WebSearch` / `websearch`。
+客户端有结果条数参数时保留并校验该值，否则使用客户端默认结果数量。
+多条查询不会合并成一条，空查询、冲突查询和无法表达的域名等筛选条件会报错。
+原生工具结果回传保留 Comate 的原始 ID、查询参数及结果条数提示。
 
 插件按本次请求的工具目录工作，不依赖应用名称或固定的全局工具表。
 `tool-adapter.mjs` 负责有序策略选择与结果关联；`tool-profiles.mjs` 声明等价能力及字段映射；
@@ -253,3 +259,5 @@ npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs
 0.5.10 保持三次 execute 上限，统一纠正格式为客户端原名，取消完整 schema 与随机别名协议的重复发送。完整客户端合约只在 systemReminder 中保留一份；原生失败反馈只保留真实失败原因及可用客户端名称。纠正和最终格式反馈建议选择能完整输出的最小下一步调用，优先使用客户端支持的增量操作，不补 JSON、不省略必需参数、不自行拆分或执行工具。
 
 云端流适配失败时，错误 message 末尾附 ` [comate_diagnostics={...}]`，只记录有界的每回合事件/字符/字节/调用计数、明确终止状态、标记出现次数、JSON 语法状态和白名单停止原因。不记录正文、推理内容、参数、工具名/ID、标记值或任意上游字段。缺少云端停止原因时标记为 `not_reported`，不据此断言输出预算耗尽。客户端 max_tokens/max_completion_tokens 当前没有映射到 Comate execute 的生成控制字段，诊断显式标注 `client_output_limit_forwarded:false`；不猜测未核实的云端 API 参数。最终格式反馈仍是 query 内标注 system 角色的 JSON 行，不能视为已证明的 SDK 原生 system 消息。真实长任务效果需后续评测确认。
+
+0.5.11 将此前分散在修复分支上的 0.5.4–0.5.10 修改汇总至 main，并保留 main 已有的网页搜索参数兼容修复。网页搜索的参数语义错误接入同一有界合约纠正流程；保留原始原生 ID、参数与真实客户端结果的对应。三次 execute 上限及客户端工具/schema/choice/parallel 校验保持一致。
