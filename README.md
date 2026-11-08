@@ -261,3 +261,11 @@ npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs
 云端流适配失败时，错误 message 末尾附 ` [comate_diagnostics={...}]`，只记录有界的每回合事件/字符/字节/调用计数、明确终止状态、标记出现次数、JSON 语法状态和白名单停止原因。不记录正文、推理内容、参数、工具名/ID、标记值或任意上游字段。缺少云端停止原因时标记为 `not_reported`，不据此断言输出预算耗尽。客户端 max_tokens/max_completion_tokens 当前没有映射到 Comate execute 的生成控制字段，诊断显式标注 `client_output_limit_forwarded:false`；不猜测未核实的云端 API 参数。最终格式反馈仍是 query 内标注 system 角色的 JSON 行，不能视为已证明的 SDK 原生 system 消息。真实长任务效果需后续评测确认。
 
 0.5.11 将此前分散在修复分支上的 0.5.4–0.5.10 修改汇总至 main，并保留 main 已有的网页搜索参数兼容修复。网页搜索的参数语义错误接入同一有界合约纠正流程；保留原始原生 ID、参数与真实客户端结果的对应。三次 execute 上限及客户端工具/schema/choice/parallel 校验保持一致。
+
+## 自动构建与发布
+
+`.github/workflows/build-release.yml` 在面向 main 的 PR、main 更新及手动触发时运行测试、构建，并校验源码、ZIP/TGZ、BUILD-INFO.json 和 SHA256SUMS。每次运行保留 30 天构建产物。PR 作业只有读取权限；只有 main 的测试构建通过后，发布作业才获得 Release 写入权限。
+
+发布版本取自 package.json：新版本号会自动创建对应 `vX.Y.Z` Release，上传 ZIP、TGZ、BUILD-INFO.json 和 SHA256SUMS；先暂存为草稿，核对远端附件 SHA-256 后才公开。相同版本号已发布时，只生成本次构建产物，不覆盖旧 Release；需要更新下载包时，请在 PR 中递增 package.json 版本号。上传中断的草稿可在同一提交上重新运行恢复。
+
+GitHub runner 无本机 Magpie 宿主，宿主集成测试会按现有测试规则明确跳过；其他测试全部运行，使用合成上游，不访问真实模型或登录态。本地完整宿主测试仍使用前述 MAGPIE_HOST/MAGPIE_BUN。构建发布流程不会安装或重载任何本机插件。

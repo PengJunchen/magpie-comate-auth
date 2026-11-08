@@ -1,0 +1,75 @@
+name: Test, build and release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install shell test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Run synthetic tests
+        run: npm test
+      - name: Build portable plugin
+        run: npm run build
+      - name: Verify source, archives and checksums
+        run: python3 scripts/verify-build.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugin-${{ github.sha }}
+          path: |
+            dist/*.zip
+            dist/*.tgz
+            dist/BUILD-INFO.json
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish new version
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: publish-main-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plugin-${{ github.sha }}
+          path: dist
+      - name: Reverify downloaded build against this commit
+        run: python3 scripts/verify-build.py
+      - name: Publish verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/publish-release.mjs
