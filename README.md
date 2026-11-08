@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.9`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.10`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.9.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.10.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.9.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.9.tgz
+├── magpie-comate-auth-0.5.10.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.10.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -249,3 +249,7 @@ npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs
 0.5.8 将一次纠正中的文本调用通道扩展到所有客户端工具合约错误，覆盖客户端尚未提供 `todo_write` 的动态工具集合。混合有效与无效调用的待执行批次整体退回，逐条以原生 ID 和参数报告未执行失败，最多纠正一次；不注册客户端未提供的工具。首回合和纠正回合的文本调用均校验完整客户端 schema、工具选择和并行约束。文本调用的下一轮仍通过完整历史回传真实客户端结果。
 
 0.5.9 消除纠正回合中“禁止文本标记”与“使用文本工具块”的指令冲突。若上游已明确结束，纠正文本仍缺少闭合工具块，且没有任何待执行原生调用，则整段文本保留不派发，以显式适配器格式反馈请求一次完整重生成。单次客户端请求最多三次云端 execute：初始执行、一次原生合约纠正、一次格式重生成；重生成不会续接残缺 JSON、伪造原生 ID、重发查询或工具结果。最终输出仍校验原客户端工具/schema/choice/parallel。重复不完整、其他合约错误、断流、网络错误、取消和服务端工具执行均明确失败，不再重试。此版本仅完成合成离线及生产宿主模拟上游验证，真实长任务覆盖仍待后续评测。
+
+0.5.10 保持三次 execute 上限，统一纠正格式为客户端原名，取消完整 schema 与随机别名协议的重复发送。完整客户端合约只在 systemReminder 中保留一份；原生失败反馈只保留真实失败原因及可用客户端名称。纠正和最终格式反馈建议选择能完整输出的最小下一步调用，优先使用客户端支持的增量操作，不补 JSON、不省略必需参数、不自行拆分或执行工具。
+
+云端流适配失败时，错误 message 末尾附 ` [comate_diagnostics={...}]`，只记录有界的每回合事件/字符/字节/调用计数、明确终止状态、标记出现次数、JSON 语法状态和白名单停止原因。不记录正文、推理内容、参数、工具名/ID、标记值或任意上游字段。缺少云端停止原因时标记为 `not_reported`，不据此断言输出预算耗尽。客户端 max_tokens/max_completion_tokens 当前没有映射到 Comate execute 的生成控制字段，诊断显式标注 `client_output_limit_forwarded:false`；不猜测未核实的云端 API 参数。最终格式反馈仍是 query 内标注 system 角色的 JSON 行，不能视为已证明的 SDK 原生 system 消息。真实长任务效果需后续评测确认。

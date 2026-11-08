@@ -244,3 +244,81 @@ test('cancellation aborts the final formatting turn and releases the native sess
   await result(await f.request(false),false)
   assert.equal(f.executions[3].isFirstQuery,true)
 })
+
+function diagnosticsOf(raw,stream) {
+  const error = stream ? raw.split('\n').filter(line=>line.startsWith('data: {')).map(line=>JSON.parse(line.slice(6))).find(event=>event.error)?.error : JSON.parse(raw).error
+  assert.ok(error)
+  const marker = ' [comate_diagnostics='
+  const start = error.message.lastIndexOf(marker)
+  assert.ok(start>=0,'failure must expose safe bounded turn diagnostics')
+  return {error,diagnostics:JSON.parse(error.message.slice(start+marker.length,-1))}
+}
+
+test('correction uses only client names and sends one schema contract instead of duplicate alias contracts',async()=>{
+  const largeSchema={...read,function:{...read.function,description:'Synthetic description '.repeat(500)}}
+  const f=await fixture([[native('todo_write',{todos:'[]'},'bad'),end],body=>corrected(body,[{name:'read',arguments:{path:'scratch.txt'}}])])
+  await result(await f.request(false,[largeSchema,search]),false)
+  const correction=f.executions[1]
+  assert.ok(!correction.systemReminder.includes('comate_client_'))
+  assert.equal(correction.systemReminder.split('Client tool contract (JSON):').length-1,1)
+  assert.ok(!correction.systemReminder.includes('Available function tools (JSON):'))
+  assert.ok(correction.toolUseResults[0].message.length<2000)
+  assert.match(correction.systemReminder,/smallest complete next call/)
+  assert.deepEqual(correction.tools,f.executions[0].tools)
+})
+
+for(const stream of [false,true]) test(`exhausted recovery exposes per-turn counts without any argument, reasoning or marker values (stream=${stream})`,async()=>{
+  const privateValue='SYNTHETIC_CONTENT_NEVER_IN_DIAGNOSTICS'
+  const malformed=body=>{
+    const marker=body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:[\w-]+\|>/)[0]
+    return [{content:{type:'ANSWER',detail:{reasoningDelta:privateValue,delta:marker+'[{"name":"read","arguments":{"path":"'+privateValue,finish_reason:'length',end:true}}}]
+  }
+  const f=await fixture([[native('todo_write',{todos:privateValue},'bad-private-id'),end],malformed,malformed])
+  const raw=await(await f.request(stream,[read,search],{max_tokens:16384})).text()
+  const {error,diagnostics:d}=diagnosticsOf(raw,stream)
+  assert.equal(d.version,1)
+  assert.equal(d.execute_attempts,3)
+  assert.equal(d.max_executes,3)
+  assert.equal(d.format_regenerations,1)
+  assert.equal(d.client_max_tokens,16384)
+  assert.equal(d.client_output_limit_forwarded,false)
+  assert.equal(d.turns.length,3)
+  assert.deepEqual(d.turns.map(turn=>turn.phase),['initial','contract_correction','format_regeneration'])
+  assert.deepEqual(d.turns.map(turn=>turn.terminal_answer),[true,true,true])
+  assert.equal(d.turns[0].native_calls,1)
+  assert.equal(d.turns[0].rejected_calls,1)
+  assert.equal(d.turns[2].provider_stop,'output_limit')
+  assert.equal(d.turns[2].block.start_markers,1)
+  assert.equal(d.turns[2].block.closing_markers,0)
+  assert.equal(d.turns[2].block.json_syntax,'invalid_or_truncated')
+  assert.ok(d.turns[2].answer_chars>privateValue.length)
+  assert.equal(d.turns[2].reasoning_chars,privateValue.length)
+  for(const value of [privateValue,'bad-private-id','MAGPIE_TOOL_CALLS:','comate_client_']) assert.ok(!error.message.includes(value))
+  assert.ok(JSON.stringify(d).length<4000)
+  assert.ok(!raw.includes('"tool_calls"'))
+  assert.ok(!raw.includes('"usage":'))
+})
+
+test('an unreported provider stop remains unknown, while a missing delimiter with complete JSON is distinguishable',async()=>{
+  const missingClose=body=>[text(body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:[\w-]+\|>/)[0]+'[{"name":"read","arguments":{"path":"scratch.txt"}}]')]
+  const f=await fixture([[native('todo_write',{todos:'[]'},'bad'),end],missingClose,missingClose])
+  const {diagnostics:d}=diagnosticsOf(await(await f.request(true)).text(),true)
+  assert.equal(d.turns[2].provider_stop,'not_reported')
+  assert.equal(d.turns[2].block.json_syntax,'complete')
+  assert.equal(d.turns[2].block.closing_markers,0)
+  assert.equal(f.executions.length,3,'observability must not add executes or guess missing delimiters')
+})
+
+test('diagnostics distinguish a different closing marker without echoing it or unknown provider metadata',async()=>{
+  const wrong=body=>[{
+    content:{type:'ANSWER',detail:{delta:body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:[\w-]+\|>/)[0]+'[{"name":"read","arguments":{"path":"scratch.txt"}}]<|/MAGPIE_TOOL_CALLS:OTHER_PRIVATE_NONCE|>',finish_reason:'UNKNOWN_PRIVATE_METADATA',end:true}},
+  }]
+  const f=await fixture([[native('todo_write',{todos:'[]'},'bad'),end],wrong,wrong])
+  const {error,diagnostics:d}=diagnosticsOf(await(await f.request(true)).text(),true)
+  assert.equal(d.turns[2].block.other_closing_markers,1)
+  assert.equal(d.turns[2].block.closing_markers,0)
+  assert.equal(d.turns[2].provider_stop,'not_reported')
+  assert.ok(!error.message.includes('OTHER_PRIVATE_NONCE'))
+  assert.ok(!error.message.includes('UNKNOWN_PRIVATE_METADATA'))
+  assert.equal(d.execute_attempts,3)
+})

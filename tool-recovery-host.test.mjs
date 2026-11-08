@@ -8,7 +8,7 @@ import {join} from 'node:path'
 import {MagpieHost,findBun,findMagpieHost} from './host-process.mjs'
 
 const bun=findBun(),hostPath=findMagpieHost()
-for(const scenario of ['unoffered','arguments','text','text-format'])for(const stream of [false,true])test(`production host corrects ${scenario} contract rejection without widening client capability (stream=${stream})`,{skip:!bun||!hostPath?'Set MAGPIE_HOST and MAGPIE_BUN':false,timeout:30000},async t=>{
+for(const scenario of ['unoffered','arguments','text','text-format','text-format-failure'])for(const stream of [false,true])test(`production host corrects ${scenario} contract rejection without widening client capability (stream=${stream})`,{skip:!bun||!hostPath?'Set MAGPIE_HOST and MAGPIE_BUN':false,timeout:30000},async t=>{
   const root=mkdtempSync(join(tmpdir(),'comate-recovery-host-'))
   t.after(()=>rmSync(root,{recursive:true,force:true}))
   const file=join(root,'keep.txt');writeFileSync(file,'ACTUAL_READ_RESULT')
@@ -17,7 +17,7 @@ for(const scenario of ['unoffered','arguments','text','text-format'])for(const s
   const rejectedInput=scenario==='arguments'?{path:file,target_directory:root}:{target_file:file}
   const acceptedName=scenario==='arguments'?clientName:'read_file'
   const acceptedInput=scenario==='arguments'?{path:file}:{target_file:file}
-  const acceptedIndex=scenario==='text-format'?3:2
+  const acceptedIndex=scenario.startsWith('text-format')?3:2
   const payloads=[]
   const server=createServer(async(req,res)=>{
     let raw='';for await(const chunk of req)raw+=chunk
@@ -36,7 +36,7 @@ for(const scenario of ['unoffered','arguments','text','text-format'])for(const s
       const marker=body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:([\w-]+)\|>/)
       events.splice(0,events.length,{content:{type:'ANSWER',detail:{delta:marker[0]+JSON.stringify([{name:clientName,arguments:{path:file}}])+'<|/MAGPIE_TOOL_CALLS:'+marker[1]+'|>',end:true}}})
     }
-    if(scenario==='text-format'&&index===2) {
+    if(scenario.startsWith('text-format')&&(index===2||scenario==='text-format-failure'&&index===3)) {
       const marker=body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:[\w-]+\|>/)[0]
       events.splice(0,events.length,{content:{type:'ANSWER',detail:{delta:marker+'[{"name":"read","arguments":',end:true}}})
     }
@@ -57,9 +57,28 @@ for(const scenario of ['unoffered','arguments','text','text-format'])for(const s
   const messages=[{role:'user',content:'Read the scratch file; never delete anything'}]
   async function request(stream=false) {
     const response=await host.fetch({provider:'comate',account:signed.account,model:'fixture-model',npm:'@ai-sdk/openai-compatible',url:'https://comate.baidu.com/v1/chat/completions',method:'POST',headers:{'content-type':'application/json'},body:Buffer.from(JSON.stringify({model:'fixture-model',messages,tools,stream})).toString('base64'),session:'recovery-host'})
-    assert.equal(response.status,200);return response.body.toString()
+    assert.equal(response.status,scenario==='text-format-failure'&&!stream?502:200);return response.body.toString()
   }
   const raw=await request(stream);let first
+  if(scenario==='text-format-failure') {
+    const error=stream?raw.split('\n').filter(line=>line.startsWith('data: {')).map(line=>JSON.parse(line.slice(6))).find(event=>event.error)?.error:JSON.parse(raw).error
+    assert.ok(error)
+    const marker=' [comate_diagnostics=',offset=error.message.lastIndexOf(marker)
+    assert.ok(offset>=0)
+    const diagnostics=JSON.parse(error.message.slice(offset+marker.length,-1))
+    assert.equal(diagnostics.execute_attempts,3)
+    assert.equal(diagnostics.format_regenerations,1)
+    assert.equal(diagnostics.turns.length,3)
+    assert.equal(diagnostics.turns[2].terminal_answer,true)
+    assert.equal(diagnostics.turns[2].block.closing_markers,0)
+    assert.equal(payloads.length,3)
+    assert.deepEqual(payloads[2].toolUseResults,[])
+    assert.deepEqual(payloads[2].tools,payloads[0].tools)
+    assert.ok(!raw.includes('"tool_calls"'))
+    assert.ok(!raw.includes('"usage":'))
+    assert.equal(existsSync(file),true)
+    return
+  }
   if(!stream)first=JSON.parse(raw).choices[0].message
   else {
     const events=raw.split('\n').filter(line=>line.startsWith('data: {')).map(line=>JSON.parse(line.slice(6)))
