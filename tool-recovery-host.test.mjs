@@ -8,7 +8,7 @@ import {join} from 'node:path'
 import {MagpieHost,findBun,findMagpieHost} from './host-process.mjs'
 
 const bun=findBun(),hostPath=findMagpieHost()
-for(const scenario of ['unoffered','arguments','text'])for(const stream of [false,true])test(`production host corrects ${scenario} contract rejection without widening client capability (stream=${stream})`,{skip:!bun||!hostPath?'Set MAGPIE_HOST and MAGPIE_BUN':false,timeout:30000},async t=>{
+for(const scenario of ['unoffered','arguments','text','text-format'])for(const stream of [false,true])test(`production host corrects ${scenario} contract rejection without widening client capability (stream=${stream})`,{skip:!bun||!hostPath?'Set MAGPIE_HOST and MAGPIE_BUN':false,timeout:30000},async t=>{
   const root=mkdtempSync(join(tmpdir(),'comate-recovery-host-'))
   t.after(()=>rmSync(root,{recursive:true,force:true}))
   const file=join(root,'keep.txt');writeFileSync(file,'ACTUAL_READ_RESULT')
@@ -17,6 +17,7 @@ for(const scenario of ['unoffered','arguments','text'])for(const stream of [fals
   const rejectedInput=scenario==='arguments'?{path:file,target_directory:root}:{target_file:file}
   const acceptedName=scenario==='arguments'?clientName:'read_file'
   const acceptedInput=scenario==='arguments'?{path:file}:{target_file:file}
+  const acceptedIndex=scenario==='text-format'?3:2
   const payloads=[]
   const server=createServer(async(req,res)=>{
     let raw='';for await(const chunk of req)raw+=chunk
@@ -26,14 +27,18 @@ for(const scenario of ['unoffered','arguments','text'])for(const stream of [fals
     if(req.url.endsWith('/task'))return res.end(JSON.stringify({code:0,data:{taskId:2}}))
     payloads.push(body)
     const index=payloads.length
-    const events=index===3?[{content:{type:'ANSWER',detail:{delta:'ACTUAL_READ_RESULT',end:true}}}]:[
+    const events=index===acceptedIndex+1?[{content:{type:'ANSWER',detail:{delta:'ACTUAL_READ_RESULT',end:true}}}]:[
       {content:{type:'FUNCTION_CALL_START',detail:{toolUse:[{id:index===1?'rejected':'accepted',name:index===1?rejectedName:acceptedName,input:index===1?rejectedInput:acceptedInput}]}}},
       {content:{type:'FUNCTION_CALL_END',detail:{toolUse:[{id:index===1?'rejected':'accepted',input:{}}]}}},
       {content:{type:'ANSWER',detail:{end:true}}},
     ]
-    if(scenario==='text'&&index===2) {
+    if(scenario.startsWith('text')&&index===acceptedIndex) {
       const marker=body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:([\w-]+)\|>/)
       events.splice(0,events.length,{content:{type:'ANSWER',detail:{delta:marker[0]+JSON.stringify([{name:clientName,arguments:{path:file}}])+'<|/MAGPIE_TOOL_CALLS:'+marker[1]+'|>',end:true}}})
+    }
+    if(scenario==='text-format'&&index===2) {
+      const marker=body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:[\w-]+\|>/)[0]
+      events.splice(0,events.length,{content:{type:'ANSWER',detail:{delta:marker+'[{"name":"read","arguments":',end:true}}})
     }
     res.setHeader('content-type','text/event-stream');res.end(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''))
   })
@@ -62,21 +67,27 @@ for(const scenario of ['unoffered','arguments','text'])for(const stream of [fals
     const parts=events.flatMap(event=>event.choices?.[0]?.delta?.tool_calls??[])
     first={role:'assistant',tool_calls:[{...parts[0],function:{...parts[0].function,arguments:parts.map(part=>part.function.arguments??'').join('')}}]}
   }
-  assert.equal(payloads.length,2);assert.equal(payloads[1].toolUseResults[0].success,false)
+  assert.equal(payloads.length,acceptedIndex);assert.equal(payloads[1].toolUseResults[0].success,false)
   assert.equal(payloads[1].toolUseResults[0].name,rejectedName)
   assert.deepEqual(payloads[1].toolUseResults[0].params,rejectedInput)
   if(scenario==='arguments')assert.match(payloads[1].toolUseResults[0].message,/custom_read.*Tool arguments \$\.target_directory: undeclared field/)
   assert.deepEqual(payloads[1].tools.map(tool=>tool.function.name),[clientName])
+  if(scenario==='text-format') {
+    assert.deepEqual(payloads[2].toolUseResults,[])
+    assert.match(JSON.parse(payloads[2].query).content,/incomplete/)
+    assert.deepEqual(payloads[2].tools,payloads[0].tools)
+  }
   const clientCall=first.tool_calls[0];assert.equal(clientCall.function.name,clientName)
   const result=readFileSync(JSON.parse(clientCall.function.arguments).path,'utf8')
   assert.equal(existsSync(file),true)
   messages.push(first,{role:'tool',tool_call_id:clientCall.id,content:result})
   assert.equal(JSON.parse(await request()).choices[0].message.content,result)
-  if(scenario==='text') {
-    assert.deepEqual(payloads[2].toolUseResults,[])
-    assert.equal(payloads[2].isFirstQuery,true)
-    assert.ok(payloads[2].query.includes(clientCall.id))
-    assert.ok(payloads[2].query.includes(result))
-  } else assert.deepEqual(payloads[2].toolUseResults,[{id:'accepted',name:acceptedName,params:acceptedInput,success:true,message:result}])
-  assert.equal(payloads[2].taskId,payloads[0].taskId);assert.equal(existsSync(file),true)
+  const next=payloads[acceptedIndex]
+  if(scenario.startsWith('text')) {
+    assert.deepEqual(next.toolUseResults,[])
+    assert.equal(next.isFirstQuery,true)
+    assert.ok(next.query.includes(clientCall.id))
+    assert.ok(next.query.includes(result))
+  } else assert.deepEqual(next.toolUseResults,[{id:'accepted',name:acceptedName,params:acceptedInput,success:true,message:result}])
+  assert.equal(next.taskId,payloads[0].taskId);assert.equal(existsSync(file),true)
 })

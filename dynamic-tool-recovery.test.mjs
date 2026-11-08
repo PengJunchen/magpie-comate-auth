@@ -30,7 +30,8 @@ async function fixture(outputs) {
     executions.push(body)
     const output = outputs[executions.length - 1]
     assert.ok(output, 'correction must be bounded')
-    const events = typeof output === 'function' ? output(body) : output
+    const events = typeof output === 'function' ? await output(body,init) : output
+    if (events instanceof Response) return events
     return new Response(events.map(event => 'data: ' + JSON.stringify(event) + '\n\n').join(''), {
       headers:{'content-type':'text/event-stream'},
     })
@@ -118,4 +119,128 @@ for (const output of ['duplicate-id','text-native-mixed','second-text-invalid'])
   assert.ok(!raw.includes('"tool_calls"'))
   assert.ok(!raw.includes('"usage":'))
   assert.equal(f.executions.length, output === 'duplicate-id' ? 1 : 2)
+})
+
+function incomplete(body) {
+  const marker = body.systemReminder.match(/<\|MAGPIE_TOOL_CALLS:[\w-]+\|>/)
+  assert.ok(marker)
+  return [text(marker[0] + '[{"name":"read","arguments":{"path":"scratch')]
+}
+
+for (const stream of [false,true]) for (const mode of ['text','native']) test(`one incomplete correction is regenerated atomically with real client result correlation (${mode}, stream=${stream})`, async() => {
+  const f = await fixture([
+    [native('todo_write', {todos:'[]'}, 'bad-todo'), end],
+    incomplete,
+    body => mode === 'text' ? corrected(body,[{name:'read',arguments:{path:'scratch.txt'}}]) : [native('read',{path:'scratch.txt'},'accepted-native'),end],
+    [text('Synthetic result received')],
+  ])
+  const first = await result(await f.request(stream),stream)
+  assert.equal(first.tool_calls.length,1)
+  const call = first.tool_calls[0]
+  assert.equal(call.function.name,'read')
+  assert.deepEqual(JSON.parse(call.function.arguments),{path:'scratch.txt'})
+  assert.equal(f.executions.length,3)
+  const [initial,correction,repair] = f.executions
+  assert.deepEqual(correction.toolUseResults.map(item=>[item.id,item.success]),[['bad-todo',false]])
+  assert.deepEqual(repair.toolUseResults,[],'format rejection must not invent a native result or replay prior failures')
+  assert.deepEqual(repair.tools,initial.tools)
+  assert.deepEqual(repair.contexts,[])
+  assert.equal(repair.conversationId,initial.conversationId)
+  assert.equal(repair.taskId,initial.taskId)
+  assert.equal(repair.isFirstQuery,false)
+  assert.equal(JSON.parse(repair.query).role,'system')
+  assert.match(JSON.parse(repair.query).content,/incomplete|format/i)
+  assert.ok(!repair.query.includes('Synthetic dynamic tool contract test'))
+  assert.ok(!correction.systemReminder.includes('not textual tool markers'))
+  f.messages.push(first,{role:'tool',tool_call_id:call.id,content:'Synthetic actual read result'})
+  await result(await f.request(stream),stream)
+  const next = f.executions[3]
+  if(mode==='native') assert.deepEqual(next.toolUseResults,[{id:'accepted-native',name:'read',params:{path:'scratch.txt'},success:true,message:'Synthetic actual read result'}])
+  else {
+    assert.equal(next.isFirstQuery,true)
+    assert.deepEqual(next.toolUseResults,[])
+    assert.ok(next.query.includes(call.id))
+    assert.ok(next.query.includes('Synthetic actual read result'))
+  }
+})
+
+for (const stream of [false,true]) test(`a second incomplete correction exhausts exactly three executes (stream=${stream})`,async()=>{
+  const f = await fixture([[native('todo_write',{todos:'[]'},'bad'),end],incomplete,incomplete])
+  const response = await f.request(stream)
+  assert.equal(response.status,stream?200:502)
+  const raw = await response.text()
+  assert.match(raw,/incomplete tool call block/)
+  assert.ok(!raw.includes('"tool_calls"'))
+  assert.ok(!raw.includes('"usage":'))
+  if(stream) {
+    assert.equal(raw.split('data: [DONE]').length-1,1)
+    assert.ok(!raw.includes('"finish_reason":"stop"'))
+  }
+  assert.equal(f.executions.length,3)
+})
+
+test('an incomplete text response with a pending native call cannot be regenerated or silently discarded',async()=>{
+  const f=await fixture([[native('todo_write',{todos:'[]'},'bad'),end],body=>[native('read',{path:'scratch.txt'},'pending'),...incomplete(body)]])
+  const raw=await(await f.request(true)).text()
+  assert.match(raw,/"error"/)
+  assert.ok(!raw.includes('"tool_calls"'))
+  assert.equal(f.executions.length,2)
+})
+
+test('the final formatting attempt still rejects unoffered tools and fails closed',async()=>{
+  const f=await fixture([[native('todo_write',{todos:'[]'},'bad'),end],incomplete,body=>corrected(body,[{name:'todo_write',arguments:{action:'list'}}])])
+  const raw=await(await f.request(true)).text()
+  assert.match(raw,/tool name was not offered/)
+  assert.ok(!raw.includes('"tool_calls"'))
+  assert.ok(!raw.includes('"usage":'))
+  assert.equal(f.executions.length,3)
+})
+
+for(const [label,last,extra] of [
+  ['schema',body=>corrected(body,[{name:'read',arguments:{path:'scratch.txt',extra:true}}]),{}],
+  ['choice',body=>corrected(body,[{name:'tool_search',arguments:{query:'read'}}]),{tool_choice:{type:'function',function:{name:'read'}}}],
+  ['parallel',body=>corrected(body,[{name:'read',arguments:{path:'scratch.txt'}},{name:'tool_search',arguments:{query:'read'}}]),{parallel_tool_calls:false}],
+  ['native execution',()=>[{content:{type:'TOOL',detail:{}}}],{}],
+  ['network',()=>new Response('',{status:500}),{}],
+]) test(`the final formatting turn preserves ${label} failure and never retries`,async()=>{
+  const f=await fixture([[native('todo_write',{todos:'[]'},'bad'),end],incomplete,last])
+  const raw=await(await f.request(true,[read,search],extra)).text()
+  assert.match(raw,/"error"/)
+  assert.ok(!raw.includes('"tool_calls"'))
+  assert.ok(!raw.includes('"usage":'))
+  assert.equal(f.executions.length,3)
+})
+
+test('an unterminated upstream stream is not a completed response eligible for formatting regeneration',async()=>{
+  const f=await fixture([[native('todo_write',{todos:'[]'},'bad'),end],body=>{
+    const events=incomplete(body)
+    events[0].content.detail.end=false
+    return events
+  }])
+  const raw=await(await f.request(true)).text()
+  assert.match(raw,/stream ended before its completion event/)
+  assert.ok(!raw.includes('"tool_calls"'))
+  assert.equal(f.executions.length,2)
+})
+
+test('cancellation aborts the final formatting turn and releases the native session',async()=>{
+  let entered,finalSignal
+  const ready=new Promise(resolve=>{entered=resolve})
+  const f=await fixture([
+    [native('todo_write',{todos:'[]'},'bad'),end],incomplete,
+    (_,init)=>new Promise((resolve,reject)=>{
+      finalSignal=init.signal;entered()
+      init.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true})
+    }),
+    [text('Fresh synthetic request')],
+  ])
+  const response=await f.request(true),reader=response.body.getReader()
+  await reader.read()
+  const pending=reader.read().catch(()=>{})
+  await ready
+  await reader.cancel();await pending
+  assert.equal(finalSignal.aborted,true)
+  assert.equal(f.executions.length,3)
+  await result(await f.request(false),false)
+  assert.equal(f.executions[3].isFirstQuery,true)
 })

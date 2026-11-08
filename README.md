@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.8`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.9`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.8.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.9.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.8.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.8.tgz
+├── magpie-comate-auth-0.5.9.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.9.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -247,3 +247,5 @@ npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs
 当原生 `todo_write` 返回 `todos` 数组，而客户端同名工具声明单条 `action` 时，0.5.7 在一次纠正回合中提供显式调用标记。只转发经原客户端 schema 验证的单条操作。下一轮以完整客户端历史回传真实工具结果。
 
 0.5.8 将一次纠正中的文本调用通道扩展到所有客户端工具合约错误，覆盖客户端尚未提供 `todo_write` 的动态工具集合。混合有效与无效调用的待执行批次整体退回，逐条以原生 ID 和参数报告未执行失败，最多纠正一次；不注册客户端未提供的工具。首回合和纠正回合的文本调用均校验完整客户端 schema、工具选择和并行约束。文本调用的下一轮仍通过完整历史回传真实客户端结果。
+
+0.5.9 消除纠正回合中“禁止文本标记”与“使用文本工具块”的指令冲突。若上游已明确结束，纠正文本仍缺少闭合工具块，且没有任何待执行原生调用，则整段文本保留不派发，以显式适配器格式反馈请求一次完整重生成。单次客户端请求最多三次云端 execute：初始执行、一次原生合约纠正、一次格式重生成；重生成不会续接残缺 JSON、伪造原生 ID、重发查询或工具结果。最终输出仍校验原客户端工具/schema/choice/parallel。重复不完整、其他合约错误、断流、网络错误、取消和服务端工具执行均明确失败，不再重试。此版本仅完成合成离线及生产宿主模拟上游验证，真实长任务覆盖仍待后续评测。
