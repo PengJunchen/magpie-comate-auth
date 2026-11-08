@@ -321,3 +321,17 @@ test("a malformed SSE frame cannot be skipped before a later completion event", 
     /invalid SSE JSON frame/,
   )
 })
+
+test("initial and corrective text blocks validate every call against the client schema", () => {
+  const offered = [{type:"function",function:{name:"read",parameters:{type:"object",properties:{path:{type:"string"}},required:["path"],additionalProperties:false}}}]
+  const spec = specFor("auto",offered)
+  for (const invalid of [{}, {path:42}, {path:"scratch.txt",extra:true}]) {
+    const block = callBlock(spec,[{name:"read",arguments:{path:"ok.txt"}},{name:"read",arguments:invalid}])
+    assert.ok(parseToolCalls(block,spec).invalid)
+    const parser = new ToolTextParser(spec)
+    assert.deepEqual(parser.push(block),[])
+    const result = parser.finish()
+    assert.ok(result.invalid)
+    assert.ok(!result.calls?.length)
+  }
+})

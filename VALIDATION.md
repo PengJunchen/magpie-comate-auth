@@ -1,3 +1,259 @@
+# 0.5.11 Consolidated main integration — 2026-11-08
+
+Repository audit found no pull requests in any state. Seven remote fix branches
+contained eight commits not reachable from main; main independently contained
+912109b (web-search argument compatibility). The integration merge retains both
+histories, all previous validation records and main's web-search regression tests.
+Conflicts in README, package version, validation history and tool adapter were
+resolved by preserving both capabilities rather than choosing one branch's files.
+
+Web-search semantic argument failures now use ToolArgumentError, so the existing
+bounded contract correction can handle them consistently. Two new synthetic
+stream/JSON regressions failed before that integration adjustment, then passed;
+they verify the actual result's original native ID and parameters after correction.
+
+Validation: 298 tests passed, 0 failed, 0 skipped using the explicitly selected
+production Magpie plugin host and Bun with synthetic loopback upstream fixtures.
+No real inference calls were made. The single-request three-execute bound and
+client tool/schema/choice/parallel validation remain in place. Release build
+validation uses a separate temporary clone and does not overwrite the installed
+plugin payload. There are no configured GitHub Actions workflows in this repo.
+
+---
+
+# 0.5.6 Explicit client contracts and bounded argument correction — 2026-11-04
+
+## Reported failure and evidence limits
+
+The supplied failure is Tool arguments $.target_directory: undeclared field.
+The previous diagnostic does not retain the native function name, so the
+original call cannot be uniquely reconstructed from that event. No private
+evaluation messages or task data are used to infer a particular function.
+
+The same failure is reproducible with an exactly declared, optional-path tool
+whose schema permits path but not target_directory. Prior ls/find had no
+directory-field profile, and exact shell tools did not enter the run_command
+field strategy. Those direct-name paths could reject valid directory/command
+aliases before client execution. Version 0.5.5's single corrective turn only
+handled unavailable names, not schema/parameter projection failures.
+
+An installed read smoke also exposed a prompt-level contract gap: the model
+reported that it could see the name read but no parameter schema, and that the
+blanket built-in prohibition left no native read_file request path. The code
+rendered names only; sending schemas in the API tools field did not establish
+that this model saw them. This evidence does not establish server internals,
+but it is sufficient to stop relying solely on that field. An earlier auto
+probe's lack of a tool call is therefore not treated as merely randomness.
+
+## Changes
+
+- Explicit model-visible client contracts include original tool descriptions,
+  exact parameter schemas and only known native adapter aliases for currently
+  offered capabilities. none, required and named selections remain consistent.
+  Read-only clients do not acquire shell aliases; delete_file is not added.
+  Native function requests still await client validation/execution, while
+  provider-side TOOL execution remains forbidden.
+- Functions, JSON object keys and alias targets use deterministic order.
+  Equivalent input key/tool order and regenerated internal protocol aliases
+  produce the same rendered contract. Tool-description constraints are retained
+  without the alias boilerplate. No timestamp or random request value enters
+  this rendered contract; this is not a claim about measured cache hits.
+- Proven field aliases project to fields the selected client schema actually
+  declares: ls/find directory paths, read/write/edit file paths, find depth,
+  grep include/glob and shell command/cmd/cwd/timeouts. Equivalent duplicate
+  aliases are compared after decoding; conflicting aliases or multiple possible
+  destinations fail. Shell mapping prefers the originally requested declared
+  shell when compatible. Content grep preserves its declared glob/include key.
+- Schema validation and known adapter projection errors become named
+  ToolContractError failures. Along with unavailable names, these share the
+  existing one-correction budget; they are sent as actual success:false
+  validation results, never silently accepted. Errors preserve the function
+  identity and failed contract field without embedding rejected values.
+
+Unknown fields are not removed. additionalProperties:false, required/type/enum
+checks and tool_choice remain effective on every corrected call. No implicit
+cd command supplies an undeclared cwd field, recursive glob_path semantics are
+not guessed as find basename matching, and no approval/deletion capability is
+introduced. Mixed valid/invalid batches still fail before exposing any pending
+client call. Repetition, network/protocol failure, cancellation and native-state
+cleanup retain their previous boundaries.
+
+## Verification
+
+252 package tests pass, 0 fail/skip, with explicit installed production Magpie
+host host-c45194121abc.js and Bun 1.4.4. New handwritten strict contracts use
+the public product interface field sets for read, ls, find, grep, bash, write
+and edit; product source was consulted read-only, with no client changes.
+They are synthetic fixtures, not copies of private evaluation requests.
+
+Coverage includes all seven tools' alias and additional-field matrices,
+streaming/JSON native-to-client result round trips, actual failed client result
+preservation, missing/invalid/enum/ambiguous inputs, shared name/argument retry
+budget, and atomic mixed-batch rejection. Production-host fixtures reproduce
+the exact optional target_directory schema error with a synthetic custom_read,
+then execute an actual parent/client read after correction in both response
+modes. The original strict schema and file remain intact. Prior directory,
+search, native session, usage, error and cancellation regressions still pass.
+
+The preliminary installed smoke first declined to call read while its schema
+was not explicit in the prompt. After explicit contract rendering, a real
+DeepSeek-v4.1-Flash gateway read and actual-result continuation both succeeded,
+with only choices/usage events, one usage chunk and DONE per response. Final
+installed artifact identity and the bounded gateway acceptance are recorded in
+the private installation receipt, separate from source-controlled test data.
+No paid evaluation task, private prompt, reasoning, patch or answer is included
+or rerun as part of this fix.
+
+---
+
+# 0.5.5 Bounded unoffered-function correction — 2026-11-04
+
+## Cause
+
+The failed response is not an empty or silently malformed SSE event. Its final
+JSON event is an explicit top-level error (api_error/comate_error), followed by
+DONE. The safe adapter diagnostic names an unoffered delete_file function;
+two other reported failures name glob_path. HTTP 200 and DONE alone therefore
+cannot establish a successful generation. The consumer's generic stream error
+obscures this upstream cause, but changing that consumer is outside this fix.
+
+The client catalog has no delete_file. Its find capability also is not one of
+the glob/Glob capabilities in the plugin's equivalence profiles; interpreting
+its pattern semantics as arbitrary recursive globs would be an unverified
+conversion. The plugin correctly refuses to issue undeclared client tools,
+but previously terminated the entire generation immediately instead of letting
+the cloud model react to that actual validation failure. Generic reminders to
+use offered functions did not prevent Comate from choosing its native names.
+
+## Repair and boundaries
+
+The current allowed client function names are now explicit in the cloud
+instructions. An UnofferedToolError identifies only an unavailable function
+name with no compatible strategy; invalid arguments and unsupported execution
+semantics are not reclassified as unavailable names.
+
+After a complete cloud turn containing only unavailable calls, the adapter may
+submit their original IDs/names/params and success:false to the same native
+task, explicitly stating that validation rejected the calls before execution.
+The result includes the unchanged current capability/choice contract. Exactly
+one such corrective result turn is permitted per client request. It is not a
+retry of an ambiguous POST, user query, image upload or executed client result.
+
+Only the corrected call, if it passes the existing adapters/schema/choice
+checks, reaches the client. No delete function, rm command, approval override
+or fabricated successful result is introduced. Repeated unknown calls, mixed
+valid/invalid batches, disabled/empty tools, parallel-limit violations, argument
+errors, incomplete streams and network errors remain failures. Cancellation
+aborts the corrective request. Failed/cancelled state is evicted and its session
+lock released. Error SSE envelopes remain errors; no fake choices, successful
+finish reason or successful usage is attached to hide them.
+
+## Verification
+
+- 188 package tests passed with the explicit installed Magpie production host
+  host-c45194121abc.js and Bun 1.4.4, 0 failed/skipped. Synthetic regressions
+  cover delete_file and glob_path, declared read/find selection, preserved IDs
+  and actual failed/successful client results, strict successful OpenAI streams,
+  repetition bound, normal streams, named/required/none choices, mixed batches,
+  malformed arguments, stream truncation, network failure, image/result replay
+  prevention, cancellation and session cleanup. Earlier directory, search,
+  context-usage and cloud-only protocol regressions remain covered.
+- New production-host fixtures exercise both streaming and JSON modes through
+  a controlled upstream. The only declared tool is read. After an injected
+  delete_file rejection, the host exposes read only, the actual parent/client
+  reads its scratch file, and the original read_file result returns to the same
+  task. The scratch file still exists throughout; no deletion tool runs.
+- A controlled live-cloud fault probe uses real DeepSeek-v4.1-Flash with read
+  as its only offered capability. The first turn's test instructions deliberately
+  induce a real native delete_file event (this is fault injection, not a claim
+  that normal production instructions naturally reproduce it every time).
+  Comate accepts success:false for the actual rejected native call, then emits
+  read_file, which becomes a client read. After the actual scratch-file result,
+  the real cloud returns RECOVERY_REAL_READ_OK. The undeleted sentinel remains.
+  Three native execute turns have catalogs [read] throughout and results [],
+  [delete_file:false], [read_file:true]; no capability is added.
+- After confirmation that the previous batch owner/resources were stopped,
+  the local path package was rebuilt as 0.5.5 and reloaded using Magpie plugin
+  add. Magpie 0.1.2862's gateway healthcheck succeeds on 127.0.0.1:3425.
+  Live gateway plain, actual read-call and read-continuation probes all return
+  HTTP 200, only choices/usage JSON events, one usage chunk and one DONE each.
+  These use stream:true, max_tokens:16384 and no temperature/reasoning_effort.
+  An initial auto-choice read probe produced no tool call (its SSE was valid);
+  a fresh probe completed the actual read chain. This is protocol/adapter smoke
+  evidence, not a guarantee that an automatic model always chooses a tool.
+
+Only synthetic fixtures and public runtime/documentation changes are committed.
+No evaluation requests, task data, answers, model reasoning, credentials, raw
+headers or private logs are included. The full evaluation restart belongs to
+the calling workflow; previous partial results are not reused by this change.
+
+---
+
+# 0.5.4 Native list_dir ignore_globs — 2026-11-04
+
+## Cause and relationship to 0.5.0
+
+The running Magpie log recorded the reported DeepSeek-v4.1-Flash failure at
+2026-11-03 23:48:37. The installed 0.5.3 adapter matched source commit 2a9b929;
+this was not a stale installation or an overwritten earlier fix. A minimal
+call with depth "2", target_directory ".", and ignore_globs "[]" reproduces
+the exact original error on the baseline. A nonempty JSON array string fails
+in the same way, before decoding or client execution.
+
+The original directory adapter in 3478aec already accepts numeric depth strings.
+Version 0.5.0 (a0890c3) adds schema-directed normalization for exact/equivalent
+declared client tools, including encoded todos. The derived list_dir-to-shell
+strategy still has its own vendor-option allowlist, which never included
+ignore_globs and has no client list_dir schema to decode that field against.
+The old diagnostic prints every input key/type whenever any key is unsupported;
+depth:string and target_directory:string are therefore misleading bystanders.
+The missing optional operation semantics and coverage, rather than a rollback
+of string-depth or todo normalization, are the root cause.
+
+## Changes and limits
+
+The derived strategy now decodes ignore_globs through an explicit array-of-strings
+schema. Both arrays and JSON-encoded arrays work; absent/empty rules preserve
+the existing ls/bounded-find commands. Nonempty rules become shell-quoted ERE
+predicates in BSD/GNU find and prune matching entries/subtrees within the depth
+bound. Single-segment wildcards do not cross separators; globstar, root anchors,
+directory-only rules, basic character classes and escaped literals are covered.
+This is an exclusion-glob list, not a gitignore parser: negation, brace expansion,
+extglobs and POSIX named character classes remain explicit unsupported syntax.
+Unknown option diagnostics now list only the actual unknown fields.
+
+Only a declared compatible bash/Bash/exec_command is emitted. Client permissions
+and execution remain authoritative. Streaming argument fragments are assembled
+before conversion. The original native ID/name/input, including the encoded
+ignore_globs string, are retained for toolUseResults and native task continuation.
+
+## Verification
+
+- 164 package tests passed, 0 failed/skipped, with installed Magpie 0.1.2862's
+  explicit production host host-c45194121abc.js and Bun 1.4.4. Host tests exercise
+  filtered directory execution and native result correlation in both streaming
+  and non-streaming modes; unit fixtures cover empty/nonempty encodings, depth,
+  glob semantics, schema selection, invalid inputs and shell/regex metacharacters.
+- Real shell fixtures pass on macOS BSD find. Six additional isolated Linux
+  GNU-find cases pass in the existing python:3.12-slim Docker image with network
+  disabled, including path anchoring, globstar, depth, character classes and
+  literal regex/shell punctuation in the root path.
+- A live Comate DeepSeek-v4.1-Flash probe emits native list_dir and fragmented
+  string-valued depth/path/ignore_globs arguments. The actual client shell lists
+  keep.txt and src/visible.txt while excluding .git/node_modules and their private
+  sentinel files. Native continuation returns DIRECTORY_IGNORE_LIVE_OK.
+- The local path installation was rebuilt as 0.5.4 and reloaded through Magpie's
+  plugin add command. The real installed Harness headless runner then completed
+  the entire Harness → local Magpie gateway → live Comate chain using a per-run
+  model overlay and a five-minute model-restricted gateway key. Session
+  session-7dcbbc7b-7726-46e5-b4c1-ad719086e2e5 contains completed client bash call
+  call_61226c20fc8f4f7685c00e64, the actual filtered listing, final text
+  HARNESS_DIRECTORY_IGNORE_OK and turn_end completed; process exit 0.
+  Scratch directories were removed and existing client model settings were not
+  changed. No credentials, local session logs or diagnostic scripts are shipped.
+
+---
+
 # 0.5.4 Web search argument adaptation — 2026-11-06
 
 The affected Harness session declared web_search with required queries:string[].

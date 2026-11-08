@@ -2,9 +2,9 @@
 // Only the calling client executes local tools. No desktop-service fallback.
 import { randomUUID } from "node:crypto"
 import * as discovery from "./discovery.mjs"
-import { buildQuery, events } from "./protocol.mjs"
+import { buildQuery, events, MAX_TOOL_TEXT_CHARS, parseToolCalls } from "./protocol.mjs"
 import { normalizeMessages, imagesFrom } from "./images.mjs"
-import { clientToolCall } from "./tool-adapter.mjs"
+import { clientToolCall, clientToolContract, UnofferedToolError, ToolContractError } from "./tool-adapter.mjs"
 import { SESSION_HEADER, sessionKey, historyHash, catalogHash, continuation, nativeResults } from "./cloud-session.mjs"
 import { createUsageMeter } from "./usage.mjs"
 
@@ -15,9 +15,57 @@ const VERSION = "1.8.0"
 const str = value => typeof value === "string" ? value : ""
 const frame = value => `data: ${JSON.stringify(value)}\n\n`
 const MAX_SESSIONS = 64
-function nativeInstructions(spec) {
+// Per client request: initial execute, one native contract correction, and
+// at most one completed-but-incomplete-text formatting turn. No POST replay.
+const MAX_FORMAT_REGENERATIONS = 1
+const MAX_EXECUTES_PER_REQUEST = 3
+const SMALL_NEXT_CALL = "Choose the smallest complete next call and return its entire JSON object and closing marker before stopping. Prefer a small incremental operation supported by the offered schema instead of a large inline file body or batch. Never omit required arguments, invent append flags, or execute/split operations yourself."
+
+function correctionFormat(spec) {
+  // nativeInstructions already carries the original client names and schemas.
+  // Do not duplicate them with a second, alias-only text adapter contract.
+  const count = spec.parallel ? "Prefer one next call." : "Return at most one call."
+  return `\nFor this correction, use only the original client names in Client tool contract (JSON). A rejected internal tool is unavailable unless the client later offers it. Output one complete block: ${spec.startTag} followed by a JSON array of {"name":"an offered client name","arguments":{...}}, followed by ${spec.endTag}. Arguments must match that client's schema. ${count} ${SMALL_NEXT_CALL} Return no prose after the closing marker. Wait for actual client results. If tool_choice permits and no call is needed or possible, answer normally without markers.`
+}
+
+function blockSummary(text, spec) {
+  const count = marker => text.split(marker).length - 1
+  const start = text.indexOf(spec.startTag)
+  const closingAtEnd = text.trimEnd().endsWith(spec.endTag)
+  const close = start < 0 || !closingAtEnd ? -1 : text.trimEnd().length - spec.endTag.length
+  let syntax = "not_attempted"
+  if (start >= 0) {
+    try { JSON.parse(text.slice(start + spec.startTag.length, close < 0 ? undefined : close).trim()); syntax = "complete" }
+    catch { syntax = "invalid_or_truncated" }
+  }
+  let closingPrefixChars = 0
+  for (let length = 1; length < spec.endTag.length; length++) if (text.trimEnd().endsWith(spec.endTag.slice(0, length))) closingPrefixChars = length
+  const otherClosingMarkers = [...text.matchAll(/<\|\/MAGPIE_TOOL_CALLS:[A-Za-z0-9_-]{1,64}\|>/g)].filter(match => match[0] !== spec.endTag).length
+  return {start_markers:count(spec.startTag), closing_markers:count(spec.endTag), closing_at_end:closingAtEnd, other_closing_markers:otherClosingMarkers, closing_prefix_chars:closingPrefixChars, json_syntax:syntax}
+}
+
+function providerStop(detail) {
+  // Report only recognized metadata values; never echo an arbitrary detail.
+  const values = [detail.finish_reason, detail.finishReason, detail.stop_reason, detail.stopReason]
+  if (values.some(value => ["length", "max_tokens", "max_output_tokens"].includes(value))) return "output_limit"
+  if (values.includes("stop")) return "stop"
+  if (values.includes("tool_calls")) return "tool_calls"
+  return "not_reported"
+}
+function actionTodoSchema(spec) {
+  if (!spec.enabled || spec.choice === "named" && spec.requiredName !== "todo_write") return
+  const tool = spec.tools.find(entry => spec.byName.get(entry.function.name) === "todo_write")
+  const schema = tool?.function.parameters
+  if (schema?.required?.includes("action") && !schema.properties?.todos && !schema.properties?.plan) return schema
+}
+
+function nativeInstructions(spec, textCorrection = false) {
   const choice = spec.choice === "required" ? "You must return at least one offered function call." : spec.choice === "named" ? `You must call only ${JSON.stringify(spec.requiredName)}.` : spec.choice === "none" ? "Do not call any function." : "Call an offered function when needed."
-  return `You are serving a remote client. Interpret the JSON-lines transcript by its roles and answer its latest turn. Use structured native function calls with the offered tool names and parameters, not textual tool markers or simulated results. The client alone executes tools; wait for its actual results. ${choice} ${spec.parallel ? "" : "Call at most one function."}`
+  const contract = clientToolContract(spec)
+  const names = contract.functions.map(tool => tool.name)
+  const todo = actionTodoSchema(spec) ? " Client todo_write takes one action at a time. The native todos array has different semantics. When the adapter supplies a correction marker, follow that correction format." : ""
+  const format = textCorrection ? "For this correction, use the client text-call format below and return a complete block; never simulate results." : "Use structured native function requests, not textual tool markers or simulated results."
+  return `You are serving a remote client. Interpret the JSON-lines transcript by its roles and answer its latest turn. ${format} The client alone executes tools after validation; wait for its actual results. Available client function names: ${JSON.stringify(names)}. The client schemas and supported native function aliases are explicit below. Prefer the client name when available; otherwise a listed native alias may request the same client capability using its native arguments, which the adapter maps and validates. Never use provider-side TOOL execution. Do not invent functions, undeclared fields or capabilities. If no offered function or listed equivalent can express the operation, explain the limitation. ${choice} ${spec.parallel ? "" : "Call at most one function."}${todo}\nClient tool contract (JSON): ${JSON.stringify(contract)}`
 }
 const textContent = content => typeof content === "string" ? content : Array.isArray(content) ? content.map(part => str(part?.text)).join("") : str(content?.text)
 
@@ -156,7 +204,7 @@ export function cloudHooks(hooks, options = {}, shared) {
         const contexts = await upload(requestImages, a.license, signal)
         // Mutating POSTs are never retried silently: an ambiguous network error
         // must not submit the same user query or tool result twice.
-        const response = await post(API + "/execute", {
+        const executeInput = {
           ...common, conversationId, taskId, query, modelKey: model, modelProvider: "Auto",
           tools: request.toolSpec.enabled ? request.toolSpec.tools.map(tool => ({ ...tool, function: { ...tool.function, name: request.toolSpec.byName.get(tool.function.name) } })) : [],
           uploadBaseInfo: { os: process.platform === "win32" ? "windows" : process.platform, ideType: "zulucli", ideName: "zulucli", ideVersion: VERSION, extName: "zulucli", extVersion: VERSION, license: a.license, username: a.who ?? "", pluginVersion: VERSION, triggerSource: "API" },
@@ -164,9 +212,21 @@ export function cloudHooks(hooks, options = {}, shared) {
           contexts, toolUseResults: native.results, subAgents: [], subAgentsChanged: false,
           systemReminder: instructions,
           extendUserQueryInfo: { commands: [], skills: [], subagents: [], rules: [] }, extend: { isMultiWorkspace: false, useWorkflow: false }, sendMode: "normal", isFirstQuery: !previous, enableMemory: false,
-        }, a.license, signal, true)
+        }
+        const response = await post(API + "/execute", executeInput, a.license, signal, true)
+        // New validation feedback, never a replay of a user query or actual
+        // client result. Text formatting failures have no native result ID.
+        const correctContract = async (results, correctionFormat, formatFeedback = "") => {
+          signal.throwIfAborted()
+          const corrected = await post(API + "/execute", {
+            ...executeInput, query: formatFeedback, contexts: [], toolUseResults: results,
+            systemReminder: nativeInstructions(request.toolSpec, true) + correctionFormat,
+            isFirstQuery: false, isUserQuery: Boolean(formatFeedback),
+          }, a.license, signal, true)
+          return corrected.body
+        }
         const nativeCalls = []
-        const adapted = new Response(cloudBody(response.body, request.toolSpec, nativeCalls, controller, signal, options.streamIdle, usage), { headers: { "content-type": "text/event-stream" } })
+        const adapted = new Response(cloudBody(response.body, request.toolSpec, nativeCalls, controller, signal, options.streamIdle, usage, correctContract, chat), { headers: { "content-type": "text/event-stream" } })
         let committed = false
         const cleanup = () => { if (!committed && key) sessions.delete(key); if (acquired) busy.delete(key) }
         const taskControl = {
@@ -182,7 +242,10 @@ export function cloudHooks(hooks, options = {}, shared) {
               if (index >= 0) pending.push({ ...remaining.splice(index, 1)[0], clientId: call.id })
             }
             if (remaining.length) throw new Error("Cloud/client tool correlation failed")
-            remember(key, { conversationId, taskId, pending, catalog, count: chat.messages.length, hash: historyHash(chat.messages) })
+            // Textual calls have no native IDs. Resume with the full client
+            // transcript rather than sending an unmatched native result.
+            if (calls.length !== pending.length) sessions.delete(key)
+            else remember(key, { conversationId, taskId, pending, catalog, count: chat.messages.length, hash: historyHash(chat.messages) })
             committed = true
             cleanup()
           },
@@ -235,48 +298,139 @@ async function* timedBytes(body, controller, signal, { firstMs = 300_000, idleMs
   }
 }
 
-function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage) {
-  const live = new Map(), completed = []
-  let hasText = false
+function cloudBody(body, spec, nativeCalls, controller, signal, idle, usage, correctContract, chat) {
   const encoder = new TextEncoder()
   async function* convert() {
+    const requested = value => Number.isSafeInteger(value) && value > 0 ? value : null
+    // Counts and fixed enums only. No text, arguments, IDs, markers, tool
+    // names, reasoning, credentials or arbitrary upstream fields are retained.
+    const diagnostics = {version:1, execute_attempts:1, max_executes:MAX_EXECUTES_PER_REQUEST, format_regenerations:0, client_max_tokens:requested(chat.max_tokens), client_max_completion_tokens:requested(chat.max_completion_tokens), client_output_limit_forwarded:false, turns:[]}
     try {
-      for await (const event of events(timedBytes(body, controller, signal, idle))) {
-        const content = event?.content
-        if (!content || typeof content.type !== "string") throw new Error("Unexpected Comate cloud event envelope")
-        const detail = content.detail ?? {}
-        if (["EXCEPTION", "QUOTA_EXCEED", "TOOL"].includes(content.type)) throw new Error(`Comate cloud stopped: ${content.type}`)
-        if (content.type.startsWith("FUNCTION_CALL_")) {
-          for (const tool of detail.toolUse ?? []) {
-            if (!str(tool.id)) throw new Error("Cloud tool call has no id")
-            const call = live.get(tool.id) ?? { id: tool.id, name: str(tool.name), input: {} }
-            if (tool.name) call.name = tool.name
-            for (const [key, value] of Object.entries(tool.input ?? {})) call.input[key] = content.type === "FUNCTION_CALL_PARAMS_APPEND" && typeof value === "string" ? (call.input[key] ?? "") + value : value
-            live.set(tool.id, call)
-            if (content.type === "FUNCTION_CALL_END") {
-              const clientCall = clientToolCall(call, spec)
-              usage.tool(call)
-              nativeCalls.push({ ...call, clientName: spec.byName.get(clientCall.name) ?? clientCall.name, clientInput: clientCall.input })
-              completed.push({ name: clientCall.name, arguments: clientCall.input })
-              live.delete(tool.id)
-              if (completed.length > 64) throw new Error("Too many cloud tool calls")
+      let format = "", formatRegenerations = 0
+      for (let correction = 0; ; correction++) {
+        const turn = {phase:correction === 0 ? "initial" : formatRegenerations ? "format_regeneration" : "contract_correction", events:0, answer_chars:0, answer_bytes:0, reasoning_chars:0, native_calls:0, rejected_calls:0, pending_native_calls:0, terminal_answer:false, provider_stop:"not_reported", outcome:"stream_open"}
+        diagnostics.turns.push(turn)
+        const live = new Map(), completed = [], rejected = [], batch = []
+        const nativeStart = nativeCalls.length
+        let hasText = false, results, correctionText = "", formatFeedback = ""
+        for await (const event of events(timedBytes(body, controller, signal, idle))) {
+          turn.events++
+          const content = event?.content
+          if (!content || typeof content.type !== "string") throw new Error("Unexpected Comate cloud event envelope")
+          const detail = content.detail ?? {}
+          if (["EXCEPTION", "QUOTA_EXCEED", "TOOL"].includes(content.type)) throw new Error(`Comate cloud stopped: ${content.type}`)
+          if (content.type.startsWith("FUNCTION_CALL_")) {
+            for (const tool of detail.toolUse ?? []) {
+              if (!str(tool.id)) throw new Error("Cloud tool call has no id")
+              const call = live.get(tool.id) ?? { id: tool.id, name: str(tool.name), input: {} }
+              if (tool.name) call.name = tool.name
+              for (const [key, value] of Object.entries(tool.input ?? {})) call.input[key] = content.type === "FUNCTION_CALL_PARAMS_APPEND" && typeof value === "string" ? (call.input[key] ?? "") + value : value
+              live.set(tool.id, call)
+              turn.pending_native_calls = live.size
+              if (content.type === "FUNCTION_CALL_END") {
+                if (batch.some(previous => previous.id === call.id)) throw new Error("Cloud reused a tool call id")
+                batch.push(call)
+                turn.native_calls++
+                try {
+                  const clientCall = clientToolCall(call, spec)
+                  nativeCalls.push({ ...call, clientName: spec.byName.get(clientCall.name) ?? clientCall.name, clientInput: clientCall.input })
+                  completed.push({ name: clientCall.name, arguments: clientCall.input })
+                } catch (error) {
+                  if (!(error instanceof UnofferedToolError || error instanceof ToolContractError)) throw error
+                  rejected.push({ call, error })
+                  turn.rejected_calls++
+                }
+                usage.tool(call)
+                live.delete(tool.id)
+                turn.pending_native_calls = live.size
+                if (completed.length + rejected.length > 64) throw new Error("Too many cloud tool calls")
+              }
+            }
+          }
+          if (content.type === "ANSWER") {
+            turn.answer_chars += str(detail.delta).length
+            turn.answer_bytes += Buffer.byteLength(str(detail.delta), "utf8")
+            turn.reasoning_chars += str(detail.reasoningDelta).length
+            const stop = providerStop(detail)
+            if (stop !== "not_reported") turn.provider_stop = stop
+            if (str(detail.reasoningDelta)) { usage.reasoning(detail.reasoningDelta); yield frame({ kind: "thinking-delta", delta: detail.reasoningDelta }) }
+            if (str(detail.delta)) {
+              usage.text(detail.delta)
+              hasText = true
+              if (correction) {
+                correctionText += detail.delta
+                if (correctionText.length > MAX_TOOL_TEXT_CHARS) throw new Error("Correction text is too large")
+              } else yield frame({ kind: "text-delta", delta: detail.delta })
+            }
+            if (detail.end === true) {
+              turn.terminal_answer = true
+              if (live.size) throw new Error("Comate ended with incomplete tool arguments")
+              if (rejected.length) {
+                turn.outcome = "native_contract_rejected"
+                if (correction || !spec.parallel && batch.length > 1) throw rejected[0].error
+                // No native call has reached the client. Reject the entire
+                // pending batch truthfully before asking for a corrected plan.
+                nativeCalls.length = nativeStart
+                format = correctionFormat(spec)
+                const names = clientToolContract(spec).functions.map(tool => tool.name)
+                results = batch.map(call => {
+                  const failure = rejected.find(item => item.call.id === call.id)
+                  const reason = failure
+                    ? `${failure.error.message}. Validation rejected this call before execution; no client tool ran.`
+                    : "Batch withheld this call before execution because another call failed validation; no client tool ran."
+                  return {
+                    id: call.id, name: call.name, params: call.input, success: false,
+                    message: `${reason} Available client function names: ${JSON.stringify(names)}. Follow the current systemReminder client contract and complete text-call format; wait for actual client results.`,
+                  }
+                })
+                break
+              }
+              if (correction && hasText) {
+                const parsed = parseToolCalls(correctionText, spec)
+                turn.block = blockSummary(correctionText, spec)
+                if (parsed.invalid) turn.outcome = "invalid_text"
+                if (parsed.invalid === "the model returned an incomplete tool call block" && !batch.length && formatRegenerations < MAX_FORMAT_REGENERATIONS) {
+                  // Only a terminal ANSWER with no pending native calls is
+                  // eligible. Do not guess missing JSON, replay results, or
+                  // fabricate a native ID for rejected text. The entire text
+                  // response was withheld; ask for a complete replacement.
+                  formatRegenerations++
+                  diagnostics.format_regenerations = formatRegenerations
+                  results = []
+                  formatFeedback = JSON.stringify({role:"system", content:`Adapter validation feedback: the previous response contained an incomplete tool-call block and was rejected in full before dispatch. No client tool ran from that response. This is the final formatting attempt for this request. Regenerate a complete response from the beginning using the current client contract and both exact markers. ${SMALL_NEXT_CALL} Do not continue the truncated block, replay previous tool results, or claim execution. If no offered tool can express the operation, explain the limitation when tool_choice permits.`})
+                  break
+                }
+                if (parsed.invalid) {
+                  const exhausted = formatRegenerations && parsed.invalid === "the model returned an incomplete tool call block" ? " (format regeneration budget exhausted)" : ""
+                  throw new Error(`Invalid correction tool block: ${parsed.invalid}${exhausted}`)
+                }
+                const actionTodo = actionTodoSchema(spec) && parsed.calls.some(call => call.name === "todo_write")
+                if (parsed.calls.length && completed.length || actionTodo && parsed.calls.length !== 1) {
+                  throw new Error("Invalid correction tool block")
+                }
+                const validated = parsed.calls.map(call => ({name:call.name, arguments:JSON.parse(call.arguments)}))
+                completed.push(...validated)
+                const text = parsed.calls.length ? parsed.content : correctionText
+                if (text) yield frame({ kind: "text-delta", delta: text })
+              }
+              if (!hasText && !completed.length) throw new Error("Comate completed without an answer or tool call")
+              if (completed.length) yield frame({ kind: "text-delta", delta: spec.startTag + JSON.stringify(completed) + spec.endTag })
+              turn.outcome = "completed"
+              yield frame({ type: "task_done", status: "completed" })
+              return
             }
           }
         }
-        if (content.type === "ANSWER") {
-          if (str(detail.reasoningDelta)) { usage.reasoning(detail.reasoningDelta); yield frame({ kind: "thinking-delta", delta: detail.reasoningDelta }) }
-          if (str(detail.delta)) { usage.text(detail.delta); hasText = true; yield frame({ kind: "text-delta", delta: detail.delta }) }
-          if (detail.end === true) {
-            if (live.size) throw new Error("Comate ended with incomplete tool arguments")
-            if (!hasText && !completed.length) throw new Error("Comate completed without an answer or tool call")
-            if (completed.length) yield frame({ kind: "text-delta", delta: spec.startTag + JSON.stringify(completed) + spec.endTag })
-            yield frame({ type: "task_done", status: "completed" })
-            return
-          }
-        }
+        if (!results) throw new Error("Comate stream ended before its completion event")
+        if (correction + 1 >= MAX_EXECUTES_PER_REQUEST) throw new Error("Comate correction execute budget exhausted")
+        diagnostics.execute_attempts++
+        body = await correctContract(results, format, formatFeedback)
       }
-      throw new Error("Comate stream ended before its completion event")
-    } catch (error) { yield frame({ type: "task_failed", errorMessage: error.message }) }
+    } catch (error) {
+      const last = diagnostics.turns.at(-1)
+      if (last?.outcome === "stream_open") last.outcome = "failed"
+      yield frame({ type: "task_failed", errorMessage: `${error.message} [comate_diagnostics=${JSON.stringify(diagnostics)}]` })
+    }
   }
   const iterator = convert()
   return new ReadableStream({

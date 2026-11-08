@@ -3,7 +3,15 @@
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value)
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const matches = (type, value) => type === "object" ? object(value) : type === "array" ? Array.isArray(value) : type === "null" ? value === null : type === "integer" ? Number.isSafeInteger(value) : type === "number" ? typeof value === "number" && Number.isFinite(value) : typeof value === type
-const fail = (path, message) => { throw new Error(`Tool arguments ${path}: ${message}`) }
+// Structured classification for failures at the adapter's validation boundary.
+// The message describes the contract, never the rejected argument value.
+export class ToolArgumentError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = "ToolArgumentError"
+  }
+}
+const fail = (path, message) => { throw new ToolArgumentError(`Tool arguments ${path}: ${message}`) }
 
 export function normalizeArguments(value, schema = {}) {
   function visit(input, rule, path, depth) {

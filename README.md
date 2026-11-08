@@ -1,6 +1,6 @@
 # Magpie Comate Auth — independent plugin
 
-本地主线开发版本 `0.5.4`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
+本地主线开发版本 `0.5.11`。通过 HTTPS 直接请求 Comate 云端，复用这台电脑的 Comate 登录态。
 不调用 Comate 本地服务的会话、工具执行或取消接口；云端不可用时直接报错。
 本插件独立维护，通过 Magpie 的非官方插件发现机制分发，未获官方市场审核批准。
 仓库是公开的非 fork 项目，并带有 `magpie-plugin` GitHub topic。无需 npm 发布。
@@ -26,7 +26,7 @@ magpie plugin login comate 1
 ### 方式二：下载构建产物，用本地文件夹安装
 
 从 [最新 Release](https://github.com/PengJunchen/magpie-comate-auth/releases/latest) 下载
-`magpie-comate-auth-0.5.4.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
+`magpie-comate-auth-0.5.11.zip`（附件里的安装包，不是 GitHub 自动生成的 Source code.zip），
 解压到准备长期保留的目录，例如 `~/MagpiePlugins/`：
 
 ```text
@@ -73,8 +73,8 @@ dist/
 │   ├── package.json
 │   ├── index.mjs
 │   └── …
-├── magpie-comate-auth-0.5.4.zip          ← 可直接解压的运行文件
-├── pengjunchen-magpie-comate-auth-0.5.4.tgz
+├── magpie-comate-auth-0.5.11.zip          ← 可直接解压的运行文件
+├── pengjunchen-magpie-comate-auth-0.5.11.tgz
 ├── BUILD-INFO.json
 └── SHA256SUMS
 ```
@@ -116,6 +116,12 @@ Windows/Linux 的路径有单元测试，但尚未完成本版本原机验收。
 Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼容的 `bash`/`Bash`，
 插件会将其转换为该客户端工具的 `ls -la -- '<目录>'` 调用，并补齐声明的 description。
 目录作为完整 shell 字符串转义；原生 `depth` 支持 1–64 的整数或整数字符串，深度大于 1 时转换成有深度边界的 `find`。
+从 `0.5.4` 开始，原生 `ignore_globs` 支持字符串数组及其 JSON 编码字符串（例如 `"[]"`、`"[\"**/node_modules/**\",\".git\"]"`）。
+空数组保持原有目录命令；非空规则转换为 BSD/GNU `find` 的匹配与剪枝，排除匹配条目及被忽略目录的子树，并保留深度限制。
+支持 `*`、`?`、完整路径段 `**`、基础字符类和反斜线转义；单个 `*` 不跨越目录分隔符。
+无分隔符规则匹配任意层级的名称，含分隔符的规则相对列举目录；前导 `/` 或 `./` 锚定该目录，尾随 `/` 只匹配目录。
+不支持 gitignore 否定规则、花括号展开、extglob 或 POSIX 命名字符类；这些规则及非法 JSON 会明确报错，不会静默取消过滤。
+0.5.0 的 JSON 参数规范化没有覆盖这条派生目录操作的 `ignore_globs`，因此旧版遇到该可选字段仍会失败；这不是深度字符串修复被撤回。
 不附加提权/审批绕过参数；仍由客户端的审批和沙箱控制执行。
 工具结果回传时保留云端原始 `list_dir` 名称、ID 和参数。
 同样，原生 `run_command` 转为客户端已声明的 `bash`/`Bash`，保留命令本身，并按客户端 schema 映射工作目录、超时和后台执行选项。
@@ -159,6 +165,18 @@ Comate 的 `list_dir` 若不在客户端目录内，但客户端提供参数兼�
 这不是完整 JSON Schema 引擎，仍拒绝 `strict:true`；客户端仍负责最终参数和权限验证。
 
 仅当前请求实际提供的工具才可能被选中，不创建不存在的能力，不降级绕过审批。
+从 `0.5.5` 开始，遇到未声明且没有可用等价适配的原生函数名（例如 `delete_file`，或客户端只提供 `find` 时的 `glob_path`），
+插件在完整云端回合结束、且没有其它合法待执行调用时，将这次真实的边界校验失败以 `success:false` 回传原云端 task，附上当前可用函数名称，只允许一次纠正。
+不会添加删除能力、自动生成删除命令或伪造执行成功；模型重新选择的函数仍须通过相同的客户端 schema、tool_choice 和执行审批。
+从 `0.5.6` 开始，已声明工具的参数契约失败也可通过同一个一次上限回传纠正，包括额外字段、缺少必需字段、类型/枚举错误和无法保留的参数语义。
+明确等价的路径别名按目标 schema 转换：`ls/find` 的 `target_directory/directory/path`、文件工具的 `target_file/target_path/file_path/path`；
+`find` 的深度别名、`grep` 的 `include/glob` 和 shell 的 `command/cmd` 等也以客户端实际声明字段为准。冲突别名或多个可能目标不猜测选择。
+不会将 `glob_path` 的递归 glob 直接等同于 `find` 的名称模式，不会为缺少 cwd 字段的 shell 自动拼接 `cd`，也不会删除未知参数来强行通过校验。
+错误信息保留原函数名和失败字段，不包含失败参数值。参数纠正后仍必须重新通过原 schema；函数名错误和参数错误不会各获一次额外重试。
+客户端原始工具说明、完整参数 schema，以及由已声明能力推导的受支持原生别名，同时明确写入模型可见提示；不再仅列名称或笼统禁止所有原生名称。
+函数按名称排序，JSON 对象键和别名列表按固定顺序渲染，去除内部随机别名包装；同一契约不引入时间戳或随机值。原生 `TOOL` 服务端执行事件仍拒绝。
+重复非法调用、混合合法与非法调用、未完成流和网络错误仍明确失败；不会重放用户输入、已执行工具结果或图片上传。
+流中顶层 `error` 表示失败，即使 HTTP 为 200 且最后有 `[DONE]`；调用方应先识别该错误，不能仅凭 `[DONE]` 判断成功。
 流式与非流式使用同一适配器，回传云端时保留原始工具名、参数及调用 ID，客户端参数转换不污染原始记录。
 搜索支持 `content`、`files_with_matches`、`count`。优先使用能完整表达请求的客户端搜索工具；
 Harness 固定内容搜索可等价接收 `content`，其他模式或额外选项则交给客户端已声明的 shell 执行转义后的 `rg`。
@@ -231,3 +249,15 @@ npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs
 独立项目的运行源码来自 [PengJunchen/plugins](https://github.com/PengJunchen/plugins/tree/codex/comate-cloud-local-20261102/packages/comate) 提交 `48801b2`；保留 MIT 许可及贡献者声明。吸收 Liu-LingYu 0.2.13 的部分云端协议思路。后续以本仓库根目录源码和测试维护公开插件。
 
 旧社区 PR [#77](https://github.com/magpie-community/plugins/pull/77) 已关闭；本项目不是该 PR 获批或市场重新上架的声明。
+
+当原生 `todo_write` 返回 `todos` 数组，而客户端同名工具声明单条 `action` 时，0.5.7 在一次纠正回合中提供显式调用标记。只转发经原客户端 schema 验证的单条操作。下一轮以完整客户端历史回传真实工具结果。
+
+0.5.8 将一次纠正中的文本调用通道扩展到所有客户端工具合约错误，覆盖客户端尚未提供 `todo_write` 的动态工具集合。混合有效与无效调用的待执行批次整体退回，逐条以原生 ID 和参数报告未执行失败，最多纠正一次；不注册客户端未提供的工具。首回合和纠正回合的文本调用均校验完整客户端 schema、工具选择和并行约束。文本调用的下一轮仍通过完整历史回传真实客户端结果。
+
+0.5.9 消除纠正回合中“禁止文本标记”与“使用文本工具块”的指令冲突。若上游已明确结束，纠正文本仍缺少闭合工具块，且没有任何待执行原生调用，则整段文本保留不派发，以显式适配器格式反馈请求一次完整重生成。单次客户端请求最多三次云端 execute：初始执行、一次原生合约纠正、一次格式重生成；重生成不会续接残缺 JSON、伪造原生 ID、重发查询或工具结果。最终输出仍校验原客户端工具/schema/choice/parallel。重复不完整、其他合约错误、断流、网络错误、取消和服务端工具执行均明确失败，不再重试。此版本仅完成合成离线及生产宿主模拟上游验证，真实长任务覆盖仍待后续评测。
+
+0.5.10 保持三次 execute 上限，统一纠正格式为客户端原名，取消完整 schema 与随机别名协议的重复发送。完整客户端合约只在 systemReminder 中保留一份；原生失败反馈只保留真实失败原因及可用客户端名称。纠正和最终格式反馈建议选择能完整输出的最小下一步调用，优先使用客户端支持的增量操作，不补 JSON、不省略必需参数、不自行拆分或执行工具。
+
+云端流适配失败时，错误 message 末尾附 ` [comate_diagnostics={...}]`，只记录有界的每回合事件/字符/字节/调用计数、明确终止状态、标记出现次数、JSON 语法状态和白名单停止原因。不记录正文、推理内容、参数、工具名/ID、标记值或任意上游字段。缺少云端停止原因时标记为 `not_reported`，不据此断言输出预算耗尽。客户端 max_tokens/max_completion_tokens 当前没有映射到 Comate execute 的生成控制字段，诊断显式标注 `client_output_limit_forwarded:false`；不猜测未核实的云端 API 参数。最终格式反馈仍是 query 内标注 system 角色的 JSON 行，不能视为已证明的 SDK 原生 system 消息。真实长任务效果需后续评测确认。
+
+0.5.11 将此前分散在修复分支上的 0.5.4–0.5.10 修改汇总至 main，并保留 main 已有的网页搜索参数兼容修复。网页搜索的参数语义错误接入同一有界合约纠正流程；保留原始原生 ID、参数与真实客户端结果的对应。三次 execute 上限及客户端工具/schema/choice/parallel 校验保持一致。

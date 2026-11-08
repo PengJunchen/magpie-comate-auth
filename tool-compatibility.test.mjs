@@ -110,3 +110,39 @@ test('a declared tool without a schema retains its exact-name arguments without 
 test('schema conversion does not pollute prototypes or accept unsafe numeric precision',()=>{
  const value=normalizeArguments(JSON.parse('{"__proto__":{"polluted":true}}'),{type:'object'});assert.equal(Object.hasOwn(value,'__proto__'),true);assert.equal({}.polluted,undefined);assert.throws(()=>normalizeArguments('9007199254740993',{type:'integer'}))
 })
+
+for(const stream of [false,true]) test(`web search ambiguity shares the bounded contract correction and preserves actual result IDs (stream=${stream})`,async()=>{
+ const executions=[]
+ const hooks=await ComateAuthPlugin({}, {fetchImpl:async(url,init)=>{
+  const body=JSON.parse(init.body)
+  if(url.endsWith('/conversation'))return Response.json({code:0,data:{id:1}})
+  if(url.endsWith('/task'))return Response.json({code:0,data:{taskId:2}})
+  executions.push(body)
+  assert.ok(executions.length<=3)
+  const n=executions.length
+  const events=n===3?[{content:{type:'ANSWER',detail:{delta:'Synthetic actual result received',end:true}}}]:[
+   {content:{type:'FUNCTION_CALL_END',detail:{toolUse:[{id:n===1?'rejected-search':'corrected-search',name:'web_search',input:n===1?{query:'first',queries:['second']}:{query:'synthetic docs'}}]}}},
+   {content:{type:'ANSWER',detail:{end:true}}},
+  ]
+  return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}})
+ }})
+ const loader=await hooks.auth.loader(async()=>({type:'api',key:'fake'}))
+ const messages=[{role:'user',content:'Search synthetic docs'}]
+ const request=stream=>loader.fetch('https://unused',{headers:{'x-magpie-comate-session':'merge-web-recovery'},body:JSON.stringify({model:'synthetic',messages,tools:[webTool],stream})})
+ const response=await request(stream)
+ assert.equal(response.status,200)
+ let call
+ if(stream){
+  const raw=await response.text(),events=raw.split('\n').filter(line=>line.startsWith('data: {')).map(line=>JSON.parse(line.slice(6)))
+  assert.ok(events.every(event=>!event.error))
+  const parts=events.flatMap(event=>event.choices?.[0]?.delta?.tool_calls??[])
+  call={...parts[0],function:{...parts[0].function,arguments:parts.map(part=>part.function.arguments??'').join('')}}
+ }else call=(await response.json()).choices[0].message.tool_calls[0]
+ assert.equal(call.function.name,'web_search')
+ assert.deepEqual(JSON.parse(call.function.arguments),{queries:['synthetic docs']})
+ assert.deepEqual(executions[1].toolUseResults.map(result=>[result.id,result.success]),[['rejected-search',false]])
+ assert.deepEqual(executions[1].tools,executions[0].tools)
+ messages.push({role:'assistant',tool_calls:[call]},{role:'tool',tool_call_id:call.id,content:'Synthetic actual search result'})
+ assert.equal((await request(false)).status,200)
+ assert.deepEqual(executions[2].toolUseResults,[{id:'corrected-search',name:'web_search',params:{query:'synthetic docs'},success:true,message:'Synthetic actual search result'}])
+})
