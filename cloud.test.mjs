@@ -62,3 +62,92 @@ test('caller abort reaches the cloud fetch without a desktop cancel request',asy
  const x=await setup([],async(url,init)=>{if(url.endsWith('/execute'))return await new Promise((resolve,reject)=>init.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true}))})
  const controller=new AbortController();const loader=await x.hooks.auth.loader(async()=>auth);const result=loader.fetch('https://unused',{body:JSON.stringify({model:'live',messages:[{role:'user',content:'hello'}]}),signal:controller.signal});setTimeout(()=>controller.abort(),10);await assert.rejects(result,{name:'AbortError'});assert.equal(x.calls.length,3)
 })
+test('aborting an unread returned stream releases its session lock', async () => {
+  const x = await setup([answer({delta:'ok', end:true})])
+  const loader = await x.hooks.auth.loader(async () => auth)
+  const request = signal => loader.fetch('https://unused', {
+    headers: {'x-magpie-comate-session':'abort-before-read'},
+    body: JSON.stringify({
+      model:'live-model',
+      messages:[{role:'user', content:'hello'}],
+      stream:true,
+    }),
+    signal,
+  })
+  const controller = new AbortController()
+  const first = await request(controller.signal)
+  assert.equal(first.status, 200)
+  controller.abort()
+
+  const second = await request()
+  assert.equal(second.status, 200)
+  assert.match(await second.text(), /finish_reason/)
+})
+
+for (const boundary of ['"finish_reason":"tool_calls"', 'data: [DONE]']) {
+  test(`late cancellation after ${boundary} cannot release a continued request lock`, async () => {
+    let executeCount = 0
+    let releaseSecond
+    let markSecondStarted
+    const secondStarted = new Promise(resolve => { markSecondStarted = resolve })
+    const x = await setup(() => executeCount === 1
+      ? [event('FUNCTION_CALL_END', {text:'from Comate'}), answer({end:true})]
+      : [answer({delta:'continued', end:true})], async url => {
+      if (url.endsWith('/execute')) {
+        executeCount++
+        if (executeCount === 2) {
+          return await new Promise(resolve => {
+            releaseSecond = resolve
+            markSecondStarted()
+          })
+        }
+      }
+    })
+    const loader = await x.hooks.auth.loader(async () => auth)
+    const request = messages => loader.fetch('https://unused', {
+      headers: {'x-magpie-comate-session':'finish-race'},
+      body: JSON.stringify({model:'live-model', messages, tools, stream:true}),
+    })
+    const initial = [{role:'user', content:'call echo'}]
+    const first = await request(initial)
+    assert.equal(first.status, 200)
+
+    const reader = first.body.getReader()
+    const decoder = new TextDecoder()
+    let output = ''
+    while (!output.includes(boundary)) {
+      const item = await reader.read()
+      assert.equal(item.done, false)
+      output += decoder.decode(item.value)
+    }
+    const callId = output.match(/"tool_calls":\[\{"index":0,"id":"([^"]+)"/)?.[1]
+    assert.ok(callId)
+    const continued = [
+      ...initial,
+      {role:'assistant', tool_calls:[{
+        id:callId,
+        type:'function',
+        function:{name:'echo', arguments:'{"text":"from Comate"}'},
+      }]},
+      {role:'tool', tool_call_id:callId, content:'client result'},
+    ]
+
+    const secondPromise = request(continued)
+    await secondStarted
+    let second
+    let secondText
+    try {
+      await reader.cancel()
+      const callsBeforeThird = x.calls.length
+      const third = await request(continued)
+      assert.equal(third.status, 409)
+      assert.equal(x.calls.length, callsBeforeThird)
+    } finally {
+      releaseSecond(sse([answer({delta:'continued', end:true})]))
+      second = await secondPromise
+      secondText = await second.text()
+    }
+    assert.equal(second.status, 200)
+    assert.match(secondText, /finish_reason/)
+  })
+}

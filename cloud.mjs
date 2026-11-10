@@ -72,7 +72,7 @@ const textContent = content => typeof content === "string" ? content : Array.isA
 export function cloudHooks(hooks, options = {}, shared) {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch
   const origin = options.cloudOrigin && options.fetchImpl ? new URL(options.cloudOrigin).origin : ORIGIN
-  const aliases = new Map(), sessions = new Map(), busy = new Set()
+  const aliases = new Map(), sessions = new Map(), busy = new Map()
   const credential = getAuth => discovery.credential(getAuth, { ...(options.discoveryOptions ?? options), port: 8741 })
   const redact = (message, license) => String(message).split(license).join("[redacted]").split(encodeURIComponent(license)).join("[redacted]")
   const failure = (status, message, license = "") => new Response(JSON.stringify({ error: { type: "comate_error", message: license ? redact(message, license) : String(message), code: status } }), {
@@ -155,7 +155,8 @@ export function cloudHooks(hooks, options = {}, shared) {
   hooks.auth.loader = async getAuth => {
     if (!discovery.isComate(await getAuth())) return {}
     return { baseURL: ORIGIN + "/v1", apiKey: "", async fetch(input, init = {}) {
-      let a, controller, key = "", acquired = false, handedOff = false
+      let a, controller, key = "", lease, acquired = false, handedOff = false
+      const releaseBusy = () => { if (acquired && busy.get(key) === lease) busy.delete(key) }
       try {
         let chat
         try { chat = JSON.parse(await shared.bodyText(input, init)) } catch { return failure(400, "Invalid chat request JSON") }
@@ -171,7 +172,7 @@ export function cloudHooks(hooks, options = {}, shared) {
         key = sessionKey(a.license, model, (headers.get(SESSION_HEADER) ?? "").slice(0, 128))
         if (key && busy.has(key)) return failure(409, "This Comate session already has an active request", a.license)
         if (busy.size >= MAX_SESSIONS) return failure(429, "Too many concurrent Comate sessions", a.license)
-        if (key) { busy.add(key); acquired = true }
+        if (key) { lease = Symbol("comate-session-request"); busy.set(key, lease); acquired = true }
         const catalog = catalogHash(chat)
         const previous = continuation(sessions.get(key), chat.messages, catalog)
         const from = previous?.count ?? 0
@@ -228,7 +229,12 @@ export function cloudHooks(hooks, options = {}, shared) {
         const nativeCalls = []
         const adapted = new Response(cloudBody(response.body, request.toolSpec, nativeCalls, controller, signal, options.streamIdle, usage, correctContract, chat), { headers: { "content-type": "text/event-stream" } })
         let committed = false
-        const cleanup = () => { if (!committed && key) sessions.delete(key); if (acquired) busy.delete(key) }
+        let abortListener
+        const cleanup = () => {
+          if (!committed && key && busy.get(key) === lease) sessions.delete(key)
+          releaseBusy()
+          if (outer && abortListener) outer.removeEventListener("abort", abortListener)
+        }
         const taskControl = {
           controller, cancelled: false, cleanup,
           usage: () => usage.value(),
@@ -250,6 +256,11 @@ export function cloudHooks(hooks, options = {}, shared) {
             cleanup()
           },
         }
+        abortListener = () => { void taskControl.cancel().catch(() => {}) }
+        if (outer) {
+          if (outer.aborted) abortListener()
+          else outer.addEventListener("abort", abortListener, { once: true })
+        }
         const result = chat.stream === true
           ? shared.streamed(chat, adapted, taskControl, request.toolSpec, randomUUID, a.license)
           : await shared.finished(chat, adapted, taskControl, request.toolSpec, randomUUID, a.license)
@@ -257,11 +268,12 @@ export function cloudHooks(hooks, options = {}, shared) {
         return result
       } catch (error) {
         controller?.abort()
-        if (acquired) { sessions.delete(key); busy.delete(key) }
+        if (acquired && busy.get(key) === lease) sessions.delete(key)
+        releaseBusy()
         if (error.name === "AbortError") throw error
         return failure(error.status === 401 || error.status === 403 || error.signIn === "expired" ? 401 : error.name === "ProtocolRequestError" || error.status === 400 ? 400 : 502, error.message, a?.license)
       } finally {
-        if (!handedOff && acquired) busy.delete(key)
+        if (!handedOff) releaseBusy()
       }
     } }
   }

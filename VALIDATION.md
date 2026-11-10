@@ -1,3 +1,35 @@
+# 0.5.12 Session lock lifecycle — 2026-11-10
+
+## Reproduction
+
+The reported 409 body is returned by the plugin's local `busy` guard before a
+cloud request is sent. It reproduced on 0.5.11 when a streaming `Response` was
+returned, its body was left unread, and the original request signal was then
+aborted; a follow-up request with the same `x-magpie-comate-session` received
+409 because no body pull ran the stream's `finally` cleanup. A second race
+reproduced after `finish_reason=tool_calls` and `[DONE]`: cancelling the old
+stream after a continuation acquired the same key deleted the continuation's
+lock by key alone.
+
+## Change and validation
+
+The plugin now listens for the caller's abort after the stream is handed off,
+so it cancels the task and releases its lock even when the body has not been
+pulled. Each active session request owns a unique lock lease; cleanup releases
+the lease only while it still owns that session key. Uncommitted session state
+is cleared only by the same owner. Client-side approval and execution remain
+in force for tools.
+
+Regression coverage verifies that aborting an unread returned stream releases
+the session for a follow-up, and that cancellation of an old stream after
+`finish_reason=tool_calls` or `[DONE]` cannot release a continued request's
+lock. Full validation with the production Magpie host and Bun selected
+explicitly (`MAGPIE_HOST=... MAGPIE_BUN=... npm test`) passed 310 tests with
+zero failures or skips. The host integration tests use synthetic loopback
+fixtures. Installed-provider live verification is recorded separately.
+
+---
+
 # 0.5.11 Consolidated main integration — 2026-11-08
 
 Repository audit found no pull requests in any state. Seven remote fix branches
