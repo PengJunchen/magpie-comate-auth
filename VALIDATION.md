@@ -5,7 +5,7 @@
 The reported 409 body is returned by the plugin's local `busy` guard before a
 cloud request is sent. It reproduced on 0.5.11 when a streaming `Response` was
 returned, its body was left unread, and the original request signal was then
-aborted; a follow-up request with the same `x-magpie-comate-session` received
+aborted. A follow-up request with the same `x-magpie-comate-session` received
 409 because no body pull ran the stream's `finally` cleanup. A second race
 reproduced after `finish_reason=tool_calls` and `[DONE]`: cancelling the old
 stream after a continuation acquired the same key deleted the continuation's
@@ -15,7 +15,7 @@ lock by key alone.
 
 The plugin now listens for the caller's abort after the stream is handed off,
 so it cancels the task and releases its lock even when the body has not been
-pulled. Each active session request owns a unique lock lease; cleanup releases
+pulled. Each active session request owns a unique lock lease. Cleanup releases
 the lease only while it still owns that session key. Uncommitted session state
 is cleared only by the same owner. Client-side approval and execution remain
 in force for tools.
@@ -26,7 +26,22 @@ the session for a follow-up, and that cancellation of an old stream after
 lock. Full validation with the production Magpie host and Bun selected
 explicitly (`MAGPIE_HOST=... MAGPIE_BUN=... npm test`) passed 310 tests with
 zero failures or skips. The host integration tests use synthetic loopback
-fixtures. Installed-provider live verification is recorded separately.
+fixtures.
+
+Local `npm run build` and `python3 scripts/verify-build.py` passed. The build
+manifest recorded commit `6b5ce8ae10cecc3a48b5385323ab905a7e69d11e`,
+`dirty:false`, and all 14 runtime payload files. GitHub Actions run
+[42794072605](https://github.com/PengJunchen/magpie-comate-auth/actions/runs/42794072605)
+passed both test/build and publish jobs. Release `v0.5.12` is Latest and its
+tag points to that commit.
+
+The active Magpie plugin updated from 0.5.11 to 0.5.12 under
+`github:PengJunchen/magpie-comate-auth`. All 14 installed payload hashes
+matched the release manifest. Sign-in remained active and the live model list
+contained 15 models. Two real gateway streaming requests on one session each
+returned HTTP 200. The first answer matched `HOT_UPDATE_OK`. The follow-up
+answer matched `HOT_UPDATE_CONTINUED`. Both responses reported estimated
+usage. The follow-up used plain text and submitted no tools.
 
 ---
 
