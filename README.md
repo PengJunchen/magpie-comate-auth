@@ -204,6 +204,24 @@ shell 路径需要客户端环境中可用的 ripgrep；插件不会在后台安
 云端路径避免了旧桌面执行端点，但这不等同于服务端所有工具均关闭或社区已接受新方案。
 真实 Codex/Claude Code 完整网关验收、维护者重新审核仍需分别记录。
 
+### Magpie 套餐与额度查询
+
+插件通过 Magpie 的 `auth.usage` 扩展显示账号套餐、授权剩余有效天数及服务端返回的日/月额度。
+查询复用当前账号的登录凭据，仅调用 Comate 桌面客户端已有的官方只读接口：
+
+- `/api/key/type/{license}`：套餐名称或套餐类型。
+- `/api/key/expiring/detail/{license}`：授权剩余有效天数。
+- `/api/openapi/v3/agent/daily_cost?username={license}`：日/月额度。
+
+授权接口只有剩余天数，因此插件不会推算或声明精确的订阅到期时间，也不推断自动续费状态。
+额度读取 `usedDailyCost/maxDailyCost` 和 `usedMonthlyCost/maxMonthlyCost`，显示原始计数及使用百分比；
+这些 `cost` 字段没有明确的积分或货币换算单位，插件不会添加未经验证的单位。
+
+部分账号的额度接口会成功返回 `data: null`。此时保留已查到的套餐信息，显示
+“积分暂不可用（官方接口未返回额度）”；空值、缺失字段和非法数值都不会显示为零积分。
+套餐与额度请求独立处理，额度失败不会清除套餐或登录信息。请求沿用元数据超时并拒绝重定向。
+这与下文的聊天 token 用量估算是两项独立功能。
+
 ### Token 用量与上下文百分比
 
 当前实测的 Comate 云端 execute 流不返回 token 用量。旧版本也没有向客户端提供 `usage`，
@@ -240,7 +258,7 @@ MAGPIE_HOST=/absolute/path/to/host.js MAGPIE_BUN=/absolute/path/to/bun npm test
 旧 `models.test.mjs`、`protocol-transport.test.mjs` 和 `integration.test.mjs` 对它的测试不能作为新云端传输验收。
 协议及发现测试继续覆盖两代实现的共有行为。
 
-npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs、usage.mjs、tool-adapter.mjs、tool-profiles.mjs、tool-schema.mjs、tool-search.mjs、images.mjs、protocol.mjs、discovery.mjs、package.json。
+npm 载荷只有 LICENSE、README.md、index.mjs、cloud.mjs、cloud-session.mjs、usage.mjs、quota.mjs、tool-adapter.mjs、tool-profiles.mjs、tool-schema.mjs、tool-search.mjs、images.mjs、protocol.mjs、discovery.mjs、package.json。
 没有安装器、二进制或生命周期脚本。当前使用 GitHub 分发；未来若发布 npm，也使用个人作用域包名。
 详见源码中的 [VALIDATION.md](./VALIDATION.md)。
 
