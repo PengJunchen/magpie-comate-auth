@@ -11,6 +11,7 @@
     "images.mjs",
     "cloud-session.mjs",
     "usage.mjs",
+    "quota.mjs",
     "tool-adapter.mjs",
     "tool-schema.mjs",
     "tool-profiles.mjs",

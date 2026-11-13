@@ -7,6 +7,7 @@ import { normalizeMessages, imagesFrom } from "./images.mjs"
 import { clientToolCall, clientToolContract, UnofferedToolError, ToolContractError } from "./tool-adapter.mjs"
 import { SESSION_HEADER, sessionKey, historyHash, catalogHash, continuation, nativeResults } from "./cloud-session.mjs"
 import { createUsageMeter } from "./usage.mjs"
+import { createQuotaReader } from "./quota.mjs"
 
 const ORIGIN = "https://comate.baidu.com"
 const API = "/api/aidevops/autocomate/rest/autowork/v2"
@@ -74,6 +75,7 @@ export function cloudHooks(hooks, options = {}, shared) {
   const origin = options.cloudOrigin && options.fetchImpl ? new URL(options.cloudOrigin).origin : ORIGIN
   const aliases = new Map(), sessions = new Map(), busy = new Map()
   const credential = getAuth => discovery.credential(getAuth, { ...(options.discoveryOptions ?? options), port: 8741 })
+  hooks.auth.usage = createQuotaReader({ credential, fetchImpl, origin, timeoutMs: options.metadataTimeoutMs ?? 15_000 })
   const redact = (message, license) => String(message).split(license).join("[redacted]").split(encodeURIComponent(license)).join("[redacted]")
   const failure = (status, message, license = "") => new Response(JSON.stringify({ error: { type: "comate_error", message: license ? redact(message, license) : String(message), code: status } }), {
     status, headers: { "content-type": "application/json", "X-Magpie-Sign-In": status === 401 ? "expired" : "kept" },
